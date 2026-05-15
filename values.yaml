@@ -148,12 +148,12 @@ nextcloud:
 
   # Server-side settings (templated into a config.php overlay).
   settings:
-    overwriteHost: drive.alaras.net
+    overwriteHost: drive.example.net
     overwriteProtocol: https
     overwriteCliUrl: ""   # auto-derived from overwriteHost+Protocol if empty
     trustedDomains:
       - localhost
-      - drive.alaras.net
+      - drive.example.net
     trustedProxies:
       - 10.1.0.0/16
     forwardedForHeaders:
@@ -167,8 +167,8 @@ nextcloud:
     customPhp: |
       ; Force Secure flag on session cookies — Nextcloud's __Host- cookie prefix
       ; only fires when session.cookie_secure is on. cloudflared terminates TLS,
-      ; so the origin sees HTTP but the browser sees HTTPS — Secure flag must be
-      ; explicitly forced. See DEPLOYMENT_PLAN.md §13.2.
+      ; so the origin sees HTTP but the browser sees HTTPS; the Secure flag has
+      ; to be explicitly forced or the cookie will be issued without it.
       session.cookie_secure = on
       session.cookie_samesite = Lax
 

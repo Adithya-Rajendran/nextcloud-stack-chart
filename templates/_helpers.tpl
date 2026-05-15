@@ -2,8 +2,8 @@
 Common template helpers.
 
 Naming convention: every resource uses one of these helpers so the chart can be
-installed under multiple release names without collision. The names follow the
-DEPLOYMENT_PLAN.md section 11 convention - short, no "aio" prefix.
+installed under multiple release names without collision. Resource names are
+short and unprefixed (no "aio" carryover from the previous chart).
 */}}
 
 {{/*
