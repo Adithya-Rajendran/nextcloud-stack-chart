@@ -36,6 +36,8 @@ nextcloud:
     registry: ghcr.io
     repository: adithya-rajendran/nextcloud-fpm
     tag: 33.0.3-fpm
+    # Pin via scripts/pin-digests.sh (overrides tag when set).
+    digest: ""
     pullPolicy: IfNotPresent
 
   # -- nginx sidecar (upstream, unmodified). Listens on 8080, talks to
@@ -45,6 +47,8 @@ nextcloud:
       registry: dhi.io
       repository: nginx
       tag: 1-compat
+      # Pin via scripts/pin-digests.sh (overrides tag when set).
+      digest: ""
       pullPolicy: IfNotPresent
     resources:
       requests:
@@ -204,8 +208,7 @@ nextcloud:
       registry: dhi.io
       repository: kubectl
       tag: "1"
-      # For supply-chain pinning, set digest (overrides tag if both present):
-      # digest: sha256:abc123...
+      # Pin via scripts/pin-digests.sh (overrides tag when set).
       digest: ""
       pullPolicy: IfNotPresent
 
@@ -233,6 +236,8 @@ postgres:
     registry: dhi.io
     repository: postgres
     tag: "18"
+    # Pin via scripts/pin-digests.sh (overrides tag when set).
+    digest: ""
     pullPolicy: IfNotPresent
 
   resources:
@@ -280,6 +285,8 @@ valkey:
     registry: dhi.io
     repository: valkey
     tag: "9"
+    # Pin via scripts/pin-digests.sh (overrides tag when set).
+    digest: ""
     pullPolicy: IfNotPresent
 
   resources:
@@ -324,6 +331,8 @@ clamav:
     registry: dhi.io
     repository: clamav
     tag: 1.5-base
+    # Pin via scripts/pin-digests.sh (overrides tag when set).
+    digest: ""
     pullPolicy: IfNotPresent
 
   resources:
@@ -386,4 +395,6 @@ tests:
     registry: dhi.io
     repository: curl
     tag: 8-alpine3.23
+    # Pin via scripts/pin-digests.sh (overrides tag when set).
+    digest: ""
     pullPolicy: IfNotPresent
