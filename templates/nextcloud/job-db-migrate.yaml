@@ -116,10 +116,21 @@ spec:
 {{- if .Values.clamav.enabled }}
               # ---- ClamAV antivirus app + config (idempotent) ---------------
               # files_antivirus settings live in oc_appconfig, not config.php.
-              # `app:install` errors if the app is already enabled — swallow it.
+              # `app:install` errors if the app is already enabled. Detect the
+              # known "already" cases and fall through to app:enable; surface
+              # any other failure rather than papering over it.
               echo "==> ensuring files_antivirus app is installed"
-              php -f /var/www/html/occ -- app:install files_antivirus -n 2>/dev/null || \
-                php -f /var/www/html/occ -- app:enable  files_antivirus -n
+              if out=$(php -f /var/www/html/occ -- app:install files_antivirus -n 2>&1); then
+                printf '%s\n' "$out"
+              else
+                printf '%s\n' "$out"
+                if printf '%s' "$out" | grep -qE 'already (installed|enabled|active)'; then
+                  php -f /var/www/html/occ -- app:enable files_antivirus -n
+                else
+                  echo "occ app:install files_antivirus failed unexpectedly — see output above" >&2
+                  exit 1
+                fi
+              fi
               for kv in \
                 "av_mode daemon" \
                 "av_host {{ include "nextcloud-stack.clamav.host" . }}" \
