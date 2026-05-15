@@ -57,9 +57,15 @@ http {
 
     # Real client IP from Cloudflare's CF-Connecting-IP header, gated by the
     # pod CIDR (only requests from cloudflared pods are trusted to set it).
+    # real_ip_recursive is OFF: this only makes sense for single-valued
+    # headers like CF-Connecting-IP. With X-Forwarded-For-style multi-value
+    # chains, recursive=on lets a client append a trusted-looking address as
+    # the rightmost link and bypass set_real_ip_from. The chart fails render
+    # if `realIp.header` is set to a multi-valued header — see
+    # nextcloud-stack.requireSingleValuedRealIpHeader in _helpers.tpl.
     set_real_ip_from {{ .Values.nextcloud.web.realIp.trustedCidr }};
     real_ip_header   {{ .Values.nextcloud.web.realIp.header }};
-    real_ip_recursive on;
+    real_ip_recursive off;
 
     map $arg_v $asset_immutable {
         "" "";
