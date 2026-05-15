@@ -9,10 +9,10 @@ WHAT'S RUNNING
   Deployment/{{ include "nextcloud-stack.nextcloud.fullname" . }}   nginx + php-fpm
   Service/{{ include "nextcloud-stack.nextcloud.fullname" . }}      ClusterIP :{{ .Values.nextcloud.service.port }}
 {{- if .Values.postgres.enabled }}
-  StatefulSet/{{ include "nextcloud-stack.postgres.fullname" . }}   Postgres 16
+  StatefulSet/{{ include "nextcloud-stack.postgres.fullname" . }}   Postgres {{ .Values.postgres.image.tag }}
 {{- end }}
 {{- if .Values.valkey.enabled }}
-  Deployment/{{ include "nextcloud-stack.valkey.fullname" . }}      Valkey 8 (Redis-compatible)
+  Deployment/{{ include "nextcloud-stack.valkey.fullname" . }}      Valkey {{ .Values.valkey.image.tag }} (Redis-compatible)
 {{- end }}
 {{- if .Values.clamav.enabled }}
   Deployment/{{ include "nextcloud-stack.clamav.fullname" . }}      ClamAV antivirus daemon
@@ -54,15 +54,32 @@ NEXT STEPS
 
    Rotate the password from the web UI immediately. Then enable TOTP/WebAuthn.
 
-5. Verify the real client IP is reaching nginx (not a 10.1.* pod IP):
+5. Verify the real client IP is reaching nginx (not a {{ .Values.nextcloud.web.realIp.trustedCidr }} pod IP):
 
    kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "nextcloud-stack.nextcloud.fullname" . }} -c web | tail -5
 
-   You should see your CF-Connecting-IP, not the cloudflared pod IP.
+   You should see your CF-Connecting-IP, not the cloudflared pod IP. If
+   logs show the cloudflared pod IP, the chart's
+   `nextcloud.web.realIp.trustedCidr` ({{ .Values.nextcloud.web.realIp.trustedCidr }})
+   does NOT match this cluster's pod CIDR. Verify with:
+
+     kubectl get nodes -o jsonpath='{.items[*].spec.podCIDR}'
 
 6. Run `helm test` for an automated smoke check:
 
    helm test {{ .Release.Name }} -n {{ .Release.Namespace }}
+
+VERIFY CLUSTER ASSUMPTIONS
+--------------------------
+The chart defaults assume Canonical K8s / Cilium. Two things to confirm
+on a non-default cluster:
+
+- networkPolicy.inClusterCidrs (currently {{ .Values.networkPolicy.inClusterCidrs }}) must
+  cover BOTH the pod CIDR and the Service CIDR. Find both with:
+    kubectl get nodes -o jsonpath='{.items[*].spec.podCIDR}'
+    kubectl cluster-info dump | grep -m1 service-cluster-ip-range
+- nextcloud.web.realIp.trustedCidr (currently {{ .Values.nextcloud.web.realIp.trustedCidr }})
+  should match the pod CIDR where cloudflared runs.
 
 WHAT'S DIFFERENT FROM GROUNDHOG2K
 ---------------------------------
@@ -72,4 +89,4 @@ WHAT'S DIFFERENT FROM GROUNDHOG2K
   more Multi-Attach failure on RWO Cinder.
 - `helm upgrade` is a single command. There is no re-apply checklist.
 
-See `charts/nextcloud-stack/README.md` for more.
+See README.md for more.
