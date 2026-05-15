@@ -20,7 +20,10 @@
 # extracting the nginx block reliably is more work than periodic manual diff.
 
 worker_processes auto;
-error_log /var/log/nginx/error.log notice;
+# Log to stdout/stderr so kubectl logs surfaces them and any future log
+# aggregator picks them up without a sidecar tail. emptyDir log volumes
+# disappear on pod restart anyway.
+error_log /dev/stderr notice;
 pid /tmp/nginx.pid;
 
 events {
@@ -39,7 +42,7 @@ http {
     log_format main '$remote_addr - $remote_user [$time_local] "$request" '
                     '$status $body_bytes_sent "$http_referer" '
                     '"$http_user_agent" "$http_x_forwarded_for"';
-    access_log /var/log/nginx/access.log main;
+    access_log /dev/stdout main;
 
     server_tokens off;
     sendfile on;
@@ -57,9 +60,15 @@ http {
 
     # Real client IP from Cloudflare's CF-Connecting-IP header, gated by the
     # pod CIDR (only requests from cloudflared pods are trusted to set it).
+    # real_ip_recursive is OFF: this only makes sense for single-valued
+    # headers like CF-Connecting-IP. With X-Forwarded-For-style multi-value
+    # chains, recursive=on lets a client append a trusted-looking address as
+    # the rightmost link and bypass set_real_ip_from. The chart fails render
+    # if `realIp.header` is set to a multi-valued header — see
+    # nextcloud-stack.requireSingleValuedRealIpHeader in _helpers.tpl.
     set_real_ip_from {{ .Values.nextcloud.web.realIp.trustedCidr }};
     real_ip_header   {{ .Values.nextcloud.web.realIp.header }};
-    real_ip_recursive on;
+    real_ip_recursive off;
 
     map $arg_v $asset_immutable {
         "" "";
@@ -89,12 +98,12 @@ http {
         gzip_types application/atom+xml text/javascript application/javascript application/json application/ld+json application/manifest+json application/rss+xml application/vnd.geo+json application/vnd.ms-fontobject application/wasm application/x-font-ttf application/x-web-app-manifest+json application/xhtml+xml application/xml font/opentype image/bmp image/svg+xml image/x-icon text/cache-manifest text/css text/plain text/vcard text/vnd.rim.location.xloc text/vtt text/x-component text/x-cross-domain-policy;
 
         # Security headers borrowed from upstream Nextcloud .htaccess.
+        # X-XSS-Protection is omitted — deprecated in modern browsers.
         add_header Referrer-Policy                   "no-referrer"       always;
         add_header X-Content-Type-Options            "nosniff"           always;
         add_header X-Frame-Options                   "SAMEORIGIN"        always;
         add_header X-Permitted-Cross-Domain-Policies "none"              always;
         add_header X-Robots-Tag                      "noindex, nofollow" always;
-        add_header X-XSS-Protection                  "1; mode=block"     always;
 
         fastcgi_hide_header X-Powered-By;
 

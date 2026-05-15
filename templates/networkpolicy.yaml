@@ -47,6 +47,10 @@ spec:
     - Ingress
     - Egress
   ingress:
+    # Only cloudflared pods in the cf-tunnel namespace. `kubectl exec` from the
+    # cron/migrate Jobs does NOT need an ingress rule here — exec traffic goes
+    # apiserver -> kubelet -> pod, not through the Service, and is not
+    # constrained by NetworkPolicy on the pod-to-pod path.
     - from:
         - namespaceSelector:
             matchLabels:
@@ -57,16 +61,26 @@ spec:
       ports:
         - port: {{ .Values.nextcloud.service.targetPort }}
           protocol: TCP
-    # Allow same-namespace ingress so the CronJob/Migrate pods can reach the
-    # exec endpoint via the apiserver (apiserver -> kubelet -> pod is its own
-    # path, not constrained by NetworkPolicy, but in-cluster Service traffic
-    # from helm-test or in-namespace probes might be).
+{{- if .Values.tests.enabled }}
+    # helm-test pod hits /status.php on the Service. Narrow rule on 8080 only.
     - from:
-        - podSelector: {}
+        - podSelector:
+            matchLabels:
+              {{- include "nextcloud-stack.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: test
+      ports:
+        - port: {{ .Values.nextcloud.service.targetPort }}
+          protocol: TCP
+{{- end }}
   egress:
     # DNS
     - to:
-        - namespaceSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
       ports:
         - port: 53
           protocol: UDP
@@ -102,14 +116,16 @@ spec:
     {{- end }}
     {{- if .Values.networkPolicy.allowAllEgress }}
     # Public internet (app updates, federation, etc.). Lock down by setting
-    # networkPolicy.allowAllEgress: false.
+    # networkPolicy.allowAllEgress: false. The `except` block keeps in-cluster
+    # traffic on the explicit per-Service rules above — see
+    # networkPolicy.inClusterCidrs.
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
             except:
-              # Block in-cluster pod CIDR — egress to in-cluster IPs must go
-              # through the explicit per-service rules above.
-              - {{ .Values.nextcloud.web.realIp.trustedCidr }}
+              {{- range .Values.networkPolicy.inClusterCidrs }}
+              - {{ . }}
+              {{- end }}
       ports:
         - port: 443
           protocol: TCP
@@ -142,15 +158,9 @@ spec:
       ports:
         - port: {{ .Values.postgres.service.port }}
           protocol: TCP
-  egress:
-    # DNS for self.
-    - to:
-        - namespaceSelector: {}
-      ports:
-        - port: 53
-          protocol: UDP
-        - port: 53
-          protocol: TCP
+  # No egress rules — single-replica postgres doesn't initiate connections.
+  # `Egress` is kept in policyTypes so absence-of-rules means deny-all even
+  # if the default-deny policy is ever removed.
 {{- end }}
 
 ---
@@ -177,14 +187,7 @@ spec:
       ports:
         - port: {{ .Values.valkey.service.port }}
           protocol: TCP
-  egress:
-    - to:
-        - namespaceSelector: {}
-      ports:
-        - port: 53
-          protocol: UDP
-        - port: 53
-          protocol: TCP
+  # No egress rules — Valkey is daemon-only. See postgres policy comment.
 {{- end }}
 
 ---
@@ -213,7 +216,12 @@ spec:
           protocol: TCP
   egress:
     - to:
-        - namespaceSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
       ports:
         - port: 53
           protocol: UDP
@@ -224,11 +232,55 @@ spec:
         - ipBlock:
             cidr: 0.0.0.0/0
             except:
-              - {{ .Values.nextcloud.web.realIp.trustedCidr }}
+              {{- range .Values.networkPolicy.inClusterCidrs }}
+              - {{ . }}
+              {{- end }}
       ports:
         - port: 443
           protocol: TCP
         - port: 80
+          protocol: TCP
+{{- end }}
+
+---
+# ---- helm-test: egress to DNS + Nextcloud Service only ---------------------
+# Sticky policy (not a hook) so `helm test` can be re-run without races. The
+# test Pod itself is a hook with delete-on-success; this NP stays.
+{{- if .Values.tests.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-test
+  labels:
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: test
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "nextcloud-stack.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: test
+  policyTypes:
+    - Ingress
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "nextcloud-stack.nextcloud.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: {{ .Values.nextcloud.service.targetPort }}
           protocol: TCP
 {{- end }}
 {{- end }}

@@ -15,14 +15,8 @@
 .vscode/
 *.tmproj
 .github/
-# Local-only files: dev scripts, example values, and (just in case) any secret blobs.
-example-values.yaml
-scripts/
+# Secrets we never want to ship inside the package.
 secrets/
 *.secret.yaml
-templates/nextcloud/test.txt
-templates/nextcloud/secret.yaml
-templates/postgres/secret.yaml
-templates/valkey/secret.yaml
-templates/postgres/job-schema-fix.yaml
-templates/postgres/configmap-initdb.yaml
+# Audit / review artifacts (transient).
+AUDIT.md

@@ -1,4 +1,0 @@
-{{/* Removed: DHI postgres does not honor /docker-entrypoint-initdb.d/.
-     Bootstrap happens via POSTGRES_USER/POSTGRES_DB/POSTGRES_PASSWORD env
-     vars on the StatefulSet directly. File kept (empty) because the
-     workspace fs doesn't permit file deletion. */}}

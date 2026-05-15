@@ -72,16 +72,54 @@ out-of-chart patches, no re-apply checklist on upgrade.
   for free. The cron + db-migrate Jobs DO mount their token (needed for
   `kubectl exec`) and use a scoped Role (only `pods/exec` on the nextcloud
   Deployment, namespace-local).
-- **Image digests, not just tags.** Each image block in `values.yaml` accepts
-  a `digest:` field (sha256:...). When set, the digest is preferred over the
-  tag — this prevents tag-mutation attacks on a publicly-exposed install.
-  Pin every image to a digest you've verified before going to production.
+- **Image digests, not just tags.** Every image block in `values.yaml`
+  accepts a `digest:` field (sha256:...). When set, the digest is preferred
+  over the tag — this prevents tag-mutation attacks on a publicly-exposed
+  install. Run `./scripts/pin-digests.sh > pins.yaml` to resolve every
+  image's current digest and apply with a second `-f pins.yaml`.
 - **PodDisruptionBudget** with `maxUnavailable: 0` for the Nextcloud Pod.
   Node drains and cluster upgrades require explicit acknowledgement
   (`kubectl drain --force` or PDB deletion) rather than silently evicting
   the only replica.
 - **`terminationGracePeriodSeconds: 120`** on the Nextcloud Pod so in-flight
   file uploads finish on rolling restarts instead of being SIGKILL'd at 30s.
+
+### Threat model
+
+The chart's NetworkPolicy is load-bearing. It's the only thing keeping
+- unauthenticated PHP-FPM on 9000 from being reachable by other pods,
+- in-cluster pods from spoofing `CF-Connecting-IP` through nginx,
+- Nextcloud-database traffic (plaintext) from being readable by
+  in-cluster sniffers.
+
+If your CNI doesn't enforce v1 NetworkPolicy (or you turn enforcement
+off for debugging and forget to turn it back on), every one of those
+controls is silently gone. Cilium with default config enforces.
+Calico does. The flannel default DOES NOT — flannel needs a separate
+policy enforcer.
+
+### Cluster assumptions
+
+The chart defaults assume Canonical K8s / Cilium. Two values are
+cluster-specific and fail silently if wrong:
+
+- `nextcloud.web.realIp.trustedCidr` — pod CIDR of the `cloudflared`
+  pods. If it doesn't match this cluster's pod CIDR, nginx ignores
+  `CF-Connecting-IP` from every request and every access log shows the
+  cloudflared pod IP as the client.
+- `networkPolicy.inClusterCidrs` — list of in-cluster CIDRs excluded
+  from the public-egress fallback rule. Should include BOTH the pod
+  CIDR and the Service CIDR. If the Service CIDR is missing, egress
+  from Nextcloud to in-cluster ClusterIP VIPs on 80/443 escapes
+  through the public lane.
+
+Find both with:
+```bash
+kubectl get nodes -o jsonpath='{.items[*].spec.podCIDR}'
+kubectl cluster-info dump | grep -m1 service-cluster-ip-range
+```
+Set them before the first install — `helm install`'s NOTES output
+prints whatever you have configured, so you can sanity-check there too.
 
 ### Apply the PodSecurityStandards `restricted` profile
 
@@ -98,38 +136,58 @@ ad-hoc manifest you `kubectl apply` into this namespace must also comply.
 
 ## Install
 
+These commands assume you're running them from the chart root (the
+directory that contains this README). Replace `.` with the path to the
+extracted chart if you're installing from a downloaded tarball.
+
 ```bash
 # 1. Pre-create Secrets (recommended).
-./charts/nextcloud-stack/scripts/bootstrap-secrets.sh \
+./scripts/bootstrap-secrets.sh \
     --namespace aio-test \
     --release nextcloud-stack
 
-# 2. Render + dry-run to catch any issues.
-helm template ./charts/nextcloud-stack \
+# 2. (Optional) pin every image to its current digest.
+./scripts/pin-digests.sh > pins.yaml
+
+# 3. Render + dry-run to catch any issues.
+helm template . \
     -n aio-test \
-    -f ./charts/nextcloud-stack/example-values.yaml \
+    -f example-values.yaml \
+    -f pins.yaml \
   | less
 
-helm install --dry-run --debug nextcloud-stack ./charts/nextcloud-stack \
+helm install --dry-run --debug nextcloud-stack . \
     -n aio-test --create-namespace \
-    -f ./charts/nextcloud-stack/example-values.yaml
+    -f example-values.yaml \
+    -f pins.yaml
 
-# 3. Real install.
-helm install nextcloud-stack ./charts/nextcloud-stack \
+# 4. Real install.
+helm install nextcloud-stack . \
     -n aio-test --create-namespace \
-    -f ./charts/nextcloud-stack/example-values.yaml
+    -f example-values.yaml \
+    -f pins.yaml
 
-# 4. Smoke test.
+# 5. Smoke test.
 helm test nextcloud-stack -n aio-test
 ```
+
+Drop the `-f pins.yaml` lines if you don't want digest pinning (the
+chart still installs, but images are referenced by mutable tag).
 
 ## Upgrade
 
 ```bash
-helm upgrade nextcloud-stack ./charts/nextcloud-stack \
+helm upgrade nextcloud-stack . \
     -n aio-test \
-    -f ./charts/nextcloud-stack/example-values.yaml
+    -f example-values.yaml \
+    -f pins.yaml
 ```
+
+> **DO NOT** change `nameOverride` or `fullnameOverride` after the first
+> install. The chart's selectorLabels derive from these values, and
+> Kubernetes Deployment selectors are immutable — a changed selector
+> means `helm upgrade` fails with "field is immutable" and you have to
+> delete and re-create the Deployment (data PVCs are kept).
 
 That's the entire upgrade procedure. **There is no re-apply checklist.** The
 previous chart required three out-of-chart patches on every upgrade
@@ -142,33 +200,21 @@ previous chart required three out-of-chart patches on every upgrade
 | `postupgrade` Job Multi-Attach failure | The db-migrate Job uses `kubectl exec` into the live Pod instead of mounting the RWO PVC. Multi-Attach is structurally impossible. |
 | `apacheDefaultSiteConfig` not loaded by Apache | No Apache. nginx config is mounted at `/etc/nginx/nginx.conf`. |
 
-## Migration from `groundhog2k/nextcloud`
+## Migration from a previous chart
 
-Phase 2 of the cutover plan. Two paths, depending on whether you can afford
-downtime for a data copy:
+Two paths:
 
-**A. Greenfield (recommended for testing):** install the new chart in a
-fresh `aio-test` namespace with empty PVCs. Verify it works end-to-end. Cut
-the CF Tunnel over, then `helm uninstall nextcloud -n aio`. Done.
+**A. Greenfield (recommended).** Install this chart in a fresh
+namespace with empty PVCs. Verify it works end-to-end. Point your
+Cloudflare Tunnel at the new Service, then uninstall the old release.
 
-**B. Reuse existing data:** scale the old Deployment to zero, detach the
-existing PVCs, set `nextcloud.persistence.{webroot,data}.existingClaim` in
-the chart values to point at them, and install. The chart's
-`schemaFixHook` Job idempotently fixes ownership if the old DB user wasn't
-the schema owner.
-
-```bash
-# Greenfield outline:
-kubectl scale deploy/nextcloud -n aio --replicas=0
-helm install nextcloud-stack ./charts/nextcloud-stack -n aio-test ...
-# verify
-# update CF Public Hostname target
-helm uninstall nextcloud -n aio
-kubectl delete pvc --all -n aio
-```
-
-See `DEPLOYMENT_PLAN.md` §16 ("clean reset procedure") for the canonical
-teardown.
+**B. Reuse existing data.** Scale the old release to zero, then set
+`nextcloud.persistence.webroot.existingClaim` and
+`nextcloud.persistence.data.existingClaim` in your values to point at
+the existing PVCs. Install. On the first boot, Nextcloud opens the
+existing data with the configured admin credentials (the bootstrap
+Secret must match the existing instance's password, or you'll have to
+reset it via `occ user:resetpassword admin`).
 
 ## Postgres major-version upgrades (out-of-chart)
 
@@ -195,9 +241,9 @@ kubectl -n aio delete pvc data-nextcloud-stack-postgres-0
 
 # 5. Bump postgres.image.tag in my-values.yaml to the new major.
 
-# 6. Re-install. The initdb script creates the role + db fresh.
-./charts/nextcloud-stack/scripts/bootstrap-secrets.sh -n aio --force
-helm install nextcloud-stack ./charts/nextcloud-stack -n aio -f my-values.yaml
+# 6. Re-install. The Postgres bootstrap env vars create the role + db fresh.
+./scripts/bootstrap-secrets.sh -n aio --force
+helm install nextcloud-stack . -n aio -f my-values.yaml
 
 # 7. Wait for postgres-0 to be Ready, then restore.
 kubectl -n aio cp /tmp/dumpall.sql nextcloud-stack-postgres-0:/tmp/dumpall.sql
@@ -211,8 +257,57 @@ kubectl -n aio scale deploy/nextcloud-stack --replicas=1
 This is operator work, not chart automation, because:
 - pg_upgrade requires both old + new postgres binaries in one image, which DHI
   doesn't publish.
-- Automated dump+restore on a Helm hook would mount the RWO PVC twice (the v1.11
-  Multi-Attach problem). Operator-driven with explicit downtime is the safe path.
+- Automated dump+restore on a Helm hook would mount the RWO PVC twice and
+  Multi-Attach. Operator-driven with explicit downtime is the safe path.
+
+## Backups
+
+The chart does not configure backups. This is intentional — a backup
+that no one tests is worse than no backup — but **don't skip this**.
+The single-operator self-hosted workload is exactly the one most likely
+to forget.
+
+The two minimums you should script outside this chart:
+
+```bash
+# 1. Postgres logical dump. Run from a sibling CronJob in the same namespace,
+#    or from operator workstation on a schedule.
+kubectl -n <ns> exec <rel>-postgres-0 -- \
+    pg_dumpall -U <user> > nextcloud-pg-$(date +%F).sql
+
+# 2. Data PVC snapshot (Cinder CSI VolumeSnapshot). Operator-driven, e.g.:
+kubectl -n <ns> create -f - <<EOF
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshot
+metadata:
+  name: nextcloud-data-$(date +%F)
+spec:
+  volumeSnapshotClassName: csi-cinder-snapshotclass
+  source:
+    persistentVolumeClaimName: <rel>-data
+EOF
+```
+
+Velero, Stash, or a homegrown CronJob+rclone all work; pick one and
+restore-test it quarterly. If you don't restore-test, you don't have
+backups.
+
+## Secret rotation
+
+The chart references external Secrets, so rotation is operator-driven.
+
+- **Admin password.** Change via the Nextcloud web UI. The Secret is for
+  the *initial* admin install only; once Nextcloud has stored the
+  hashed password in its DB, the Secret value isn't re-read.
+- **Postgres password.** Update the Secret, then
+  `kubectl -n <ns> rollout restart deploy/<rel>` for the Nextcloud pod
+  to pick up the new value AND `kubectl -n <ns> exec <rel>-postgres-0
+  -- psql -c "ALTER ROLE <user> WITH PASSWORD '<new>';"` for the DB
+  side. Plan a short outage window — order matters.
+- **Valkey password.** Update the Secret, then
+  `kubectl -n <ns> rollout restart deploy/<rel>-valkey deploy/<rel>`.
+  The valkey config is mounted from a Secret and the Nextcloud config
+  reads the password from an env var — both pods need to roll.
 
 ## Values reference
 
@@ -265,19 +360,28 @@ kubectl -n <ns> logs <postgres-pod>
 
 Nextcloud's first-install `occ` step hasn't completed. Tail the php container:
 ```bash
-kubectl -n <ns> logs deploy/<rel>-nextcloud-stack -c php --tail=200 -f
+kubectl -n <ns> logs deploy/<rel> -c php --tail=200 -f
 ```
 
 Common cause on a re-used PVC: `partial install detected`. Either let it
-finish (Nextcloud retries) or run a manual install per
-`DEPLOYMENT_PLAN.md` §12.1.
+finish (Nextcloud retries) or rerun the install manually:
+```bash
+kubectl -n <ns> exec deploy/<rel> -c php -- \
+    php -f /var/www/html/occ -- maintenance:install \
+        --database pgsql --database-host <rel>-postgres \
+        --database-name nextcloud --database-user nextcloud \
+        --database-pass "$PG_PASSWORD" \
+        --admin-user admin --admin-pass "$ADMIN_PASSWORD"
+```
 
-### nginx logs show `10.1.*` as client IP, not the real IP
+### nginx logs show pod IPs instead of real client IPs
 
 `real_ip_header` is the wrong name, or the request didn't come through
 Cloudflare. Check that the CF Tunnel sets `CF-Connecting-IP` (it does by
 default for the Free plan), and that
 `nextcloud.web.realIp.trustedCidr` actually covers the cloudflared pod IPs.
+The chart's `helm install` NOTES print the configured value as a
+sanity-check.
 
 ### Helm hook Job stuck pending or failing
 

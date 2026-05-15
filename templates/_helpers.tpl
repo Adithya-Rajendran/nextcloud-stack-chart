@@ -2,8 +2,8 @@
 Common template helpers.
 
 Naming convention: every resource uses one of these helpers so the chart can be
-installed under multiple release names without collision. The names follow the
-DEPLOYMENT_PLAN.md section 11 convention - short, no "aio" prefix.
+installed under multiple release names without collision. Resource names are
+short and unprefixed (no "aio" carryover from the previous chart).
 */}}
 
 {{/*
@@ -193,5 +193,26 @@ Args (dict):
 {{- $section := index . "section" -}}
 {{- if not $existing -}}
 {{- fail (printf "%s.existingSecret is required. Pre-create the Secret with scripts/bootstrap-secrets.sh and set %s.existingSecret to its name." $section $section) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Validate that nextcloud.web.realIp.header is a single-valued header.
+
+The nginx config has real_ip_recursive OFF — a deliberate hardening. With
+multi-valued headers (X-Forwarded-For, Forwarded) AND recursive ON, a client
+can bypass set_real_ip_from by appending a trusted-looking address as the
+rightmost link. With recursive OFF, multi-valued headers will only see the
+leftmost / rightmost element (depending on nginx parser quirks) and the
+single-source NetworkPolicy gate becomes meaningless.
+
+If you genuinely need multi-valued header support, switch behind a proxy
+that emits a single-valued header (Cloudflare's CF-Connecting-IP is the
+canonical example).
+*/}}
+{{- define "nextcloud-stack.requireSingleValuedRealIpHeader" -}}
+{{- $h := .Values.nextcloud.web.realIp.header -}}
+{{- if or (eq $h "X-Forwarded-For") (eq $h "Forwarded") -}}
+{{- fail (printf "nextcloud.web.realIp.header is %q. The chart's nginx config sets real_ip_recursive off and cannot safely consume multi-valued forwarded-for chains. Use a single-valued header (e.g. CF-Connecting-IP) emitted by a trusted proxy gated via NetworkPolicy." $h) -}}
 {{- end -}}
 {{- end -}}

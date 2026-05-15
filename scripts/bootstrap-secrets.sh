@@ -91,8 +91,11 @@ VALKEY_PW="$(gen_pw 32)"
 
 # Valkey config with requirepass baked in. Mirror of templates/valkey/secret.yaml
 # (the chart no longer renders that template — see SECRET note in values.yaml).
+# `bind 0.0.0.0 -::` listens on IPv4-wildcard, optionally on IPv6 (the `-`
+# prefix marks the address as "may fail to bind"). The cluster is IPv4-only
+# via the pod CIDR, so v6 won't bind and that's fine.
 VALKEY_CONF="$(cat <<EOF
-bind 0.0.0.0 -::*
+bind 0.0.0.0 -::
 port 6379
 protected-mode yes
 requirepass $VALKEY_PW

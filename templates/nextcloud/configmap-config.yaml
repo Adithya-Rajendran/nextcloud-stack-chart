@@ -32,9 +32,8 @@ data:
 
         // overwriteCondAddr deliberately omitted. The nginx layer rewrites
         // REMOTE_ADDR via the real_ip module before PHP sees the request, so
-        // gating the overwrite on a 10.1.* regex would never match a real
+        // gating the overwrite on a pod-CIDR regex would never match a real
         // public client and the rewrites would silently no-op.
-        // See DEPLOYMENT_PLAN.md §13.1.
 
         'trusted_domains' => [
 {{- range $i, $d := .Values.nextcloud.settings.trustedDomains }}
@@ -83,7 +82,7 @@ data:
         // hook installs the files_antivirus app and configures it. See
         // templates/nextcloud/job-db-migrate.yaml.
 
-        // Cosmetic / setup-warning silencers (see DEPLOYMENT_PLAN.md §13.3).
+        // Cosmetic / setup-warning silencers.
         'default_phone_region'     => '{{ .Values.nextcloud.settings.defaultPhoneRegion }}',
         'maintenance_window_start' => {{ .Values.nextcloud.settings.maintenanceWindowStart | int }},
         // Single-pod install — value is cosmetic, silences the

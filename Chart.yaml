@@ -13,10 +13,10 @@ version: 0.1.0
 # When bumping Nextcloud, bump this AND values.yaml `nextcloud.image.tag`.
 appVersion: "33.0.3"
 
-home: https://github.com/Adithya-Rajendran/nextcloud-aio-on-k8s
+home: https://github.com/adithya-rajendran/nextcloud-stack-chart
 sources:
-  - https://github.com/Adithya-Rajendran/nextcloud-aio-on-k8s
-  - https://github.com/Adithya-Rajendran/nextcloud-images
+  - https://github.com/adithya-rajendran/nextcloud-stack-chart
+  - https://github.com/adithya-rajendran/nextcloud-images
 keywords:
   - nextcloud
   - postgres
