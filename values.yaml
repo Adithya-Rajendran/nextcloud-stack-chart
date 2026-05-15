@@ -185,6 +185,10 @@ nextcloud:
     concurrencyPolicy: Forbid
     successfulJobsHistoryLimit: 1
     failedJobsHistoryLimit: 3
+    # cron.php can run long on expensive maintenance (file scan + AV).
+    # Raise if `kubectl get cronjob ... -o yaml | yq '.status'` shows
+    # last-run failures with DeadlineExceeded.
+    activeDeadlineSeconds: 480
     resources:
       requests:
         cpu: 50m
@@ -218,7 +222,11 @@ nextcloud:
       requests: { cpu: 50m, memory: 64Mi }
       limits:   { cpu: 500m, memory: 256Mi }
     backoffLimit: 3
-    activeDeadlineSeconds: 600
+    # On a fresh install the rollout-wait alone can take 5-10 min on slow
+    # Cinder (initdb + first /var/www/html copy + maintenance:install).
+    # Raise both values together if you see Job DeadlineExceeded.
+    activeDeadlineSeconds: 900
+    rolloutStatusTimeoutSeconds: 600
 
 # -----------------------------------------------------------------------------
 # Postgres

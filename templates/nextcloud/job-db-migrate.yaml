@@ -65,7 +65,7 @@ spec:
             - --namespace
             - {{ .Release.Namespace }}
             - deploy/{{ $fullname }}
-            - --timeout=300s
+            - --timeout={{ .Values.nextcloud.dbMigrateJob.rolloutStatusTimeoutSeconds }}s
           resources:
             requests: { cpu: 10m, memory: 32Mi }
             limits:   { cpu: 200m, memory: 128Mi }
