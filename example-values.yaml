@@ -1,12 +1,11 @@
 # nextcloud-stack example values.
 #
 # Prerequisite: pre-create the chart's external Secrets:
-#   ./charts/nextcloud-stack/scripts/bootstrap-secrets.sh \
-#       --namespace aio-test --release nextcloud-stack
+#   ./scripts/bootstrap-secrets.sh --namespace aio-test --release nextcloud-stack
 #
-# Then install:
-#   helm install nextcloud-stack ./charts/nextcloud-stack \
-#       -n aio-test --create-namespace -f my-values.yaml
+# Then install (from the chart root):
+#   helm install nextcloud-stack . -n aio-test --create-namespace \
+#       -f example-values.yaml
 #
 # The chart fails template render if any `existingSecret` is empty.
 
