@@ -1,0 +1,98 @@
+{{/*
+Nextcloud config overlay (zz-chart.config.php) + a before-starting hook script
+that copies it into /var/www/html/config/ on every pod start.
+
+Nextcloud autoloads /var/www/html/config/*.config.php in alphabetical order
+after the base config.php — zz-* is loaded last so its values win.
+
+Why a hook instead of a direct mount: the PVC at /var/www/html is empty on
+first install, so we can't mount a file at /var/www/html/config/anything before
+the entrypoint copies the source tree into the volume. The hook runs AFTER
+the source is in place but BEFORE php-fpm starts.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-config
+  labels:
+    {{- include "nextcloud-stack.nextcloud.labels" . | nindent 4 }}
+data:
+  zz-chart.config.php: |
+    <?php
+    // ============================================================================
+    // Managed by the nextcloud-stack Helm chart. DO NOT EDIT BY HAND inside the
+    // container — changes are overwritten on the next pod start. Edit
+    // values.yaml `nextcloud.settings.*` and `helm upgrade` instead.
+    // ============================================================================
+    $CONFIG = [
+        // Public-facing URL — used everywhere Nextcloud emits its own URLs.
+        'overwriteprotocol' => '{{ .Values.nextcloud.settings.overwriteProtocol }}',
+        'overwritehost'     => '{{ .Values.nextcloud.settings.overwriteHost }}',
+        'overwrite.cli.url' => '{{ include "nextcloud-stack.overwriteCliUrl" . }}',
+
+        // overwriteCondAddr deliberately omitted. The nginx layer rewrites
+        // REMOTE_ADDR via the real_ip module before PHP sees the request, so
+        // gating the overwrite on a 10.1.* regex would never match a real
+        // public client and the rewrites would silently no-op.
+        // See DEPLOYMENT_PLAN.md §13.1.
+
+        'trusted_domains' => [
+{{- range $i, $d := .Values.nextcloud.settings.trustedDomains }}
+            {{ $i }} => '{{ $d }}',
+{{- end }}
+        ],
+
+        // trusted_proxies is the IP allowlist Nextcloud uses when deciding
+        // whether to honor forwarded headers. Pod CIDR covers cloudflared.
+        'trusted_proxies' => [
+{{- range $i, $p := .Values.nextcloud.settings.trustedProxies }}
+            {{ $i }} => '{{ $p }}',
+{{- end }}
+        ],
+
+        // Read the real client IP from this header (set by Cloudflare on every
+        // request through the tunnel). Must match nginx real_ip_header.
+        'forwarded_for_headers' => [
+{{- range $i, $h := .Values.nextcloud.settings.forwardedForHeaders }}
+            {{ $i }} => '{{ $h }}',
+{{- end }}
+        ],
+
+        // Caching: APCu for single-pod opcode/local cache, Valkey (Redis
+        // wire-compatible) for distributed cache + transactional file locking.
+{{- if .Values.valkey.enabled }}
+        'memcache.local'       => '\\OC\\Memcache\\APCu',
+        'memcache.distributed' => '\\OC\\Memcache\\Redis',
+        'memcache.locking'     => '\\OC\\Memcache\\Redis',
+        'redis' => [
+            'host'    => '{{ include "nextcloud-stack.valkey.host" . }}',
+            'port'    => {{ .Values.valkey.service.port | int }},
+            'dbindex' => 0,
+            'timeout' => 1.5,
+{{- if .Values.valkey.auth.enabled }}
+            // Read at runtime so the password isn't baked into this ConfigMap.
+            'password' => (string)getenv('REDIS_HOST_PASSWORD'),
+{{- end }}
+        ],
+{{- else }}
+        'memcache.local' => '\\OC\\Memcache\\APCu',
+{{- end }}
+
+        // ClamAV settings live in oc_appconfig (set via `occ config:app:set
+        // files_antivirus ...`). The db-migrate Job's post-install/post-upgrade
+        // hook installs the files_antivirus app and configures it. See
+        // templates/nextcloud/job-db-migrate.yaml.
+
+        // Cosmetic / setup-warning silencers (see DEPLOYMENT_PLAN.md §13.3).
+        'default_phone_region'     => '{{ .Values.nextcloud.settings.defaultPhoneRegion }}',
+        'maintenance_window_start' => {{ .Values.nextcloud.settings.maintenanceWindowStart | int }},
+        // Single-pod install — value is cosmetic, silences the
+        // "Configuration server ID isn't configured" admin warning.
+        'config_partition_id'      => 'main',
+
+        // Cinder PVC mounts as root-owned, fsGroup adds www-data group, leaves
+        // mode 0775. Nextcloud's data-dir check wants 0770 but the running
+        // user (www-data, non-owner) can't chmod. The pod's filesystem is
+        // already isolated by K8s, so the "world readable" risk doesn't apply.
+        'check_data_directory_permissions' => false,
+    ];

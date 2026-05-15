@@ -1,0 +1,100 @@
+{{- if .Values.clamav.enabled }}
+{{/*
+ClamAV Deployment — folded in from manifests/clamav/clamav.yaml.
+
+Signature DB lives on emptyDir; freshclam re-downloads ~250 MB on cold start.
+This saves a Cinder volume slot at the cost of a 1–3 minute boot every time the
+pod restarts. Worth the trade-off for an antivirus daemon that's mostly idle.
+*/}}
+{{- $fullname := include "nextcloud-stack.clamav.fullname" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "nextcloud-stack.clamav.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "nextcloud-stack.clamav.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "nextcloud-stack.clamav.selectorLabels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/clamav/configmap.yaml") . | sha256sum }}
+    spec:
+      {{- include "nextcloud-stack.imagePullSecrets" . | nindent 6 }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.clamav.podSecurityContext | nindent 8 }}
+      containers:
+        - name: clamav
+          image: {{ include "nextcloud-stack.image" .Values.clamav.image }}
+          imagePullPolicy: {{ .Values.clamav.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.clamav.containerSecurityContext | nindent 12 }}
+          # Use the unprivileged entrypoint (no chown). Default `init` symlinks
+          # to docker-entrypoint.sh which chowns /var/lib/clamav at start and
+          # fails for non-root regardless of CAP_CHOWN (no_new_privs blocks
+          # capability use). The -unprivileged variant skips that step.
+          command: ["/usr/local/bin/docker-entrypoint-unprivileged.sh"]
+          ports:
+            - name: clamd
+              containerPort: {{ .Values.clamav.service.port }}
+              protocol: TCP
+          env:
+            - { name: CLAMD_STARTUP_TIMEOUT, value: "1800" }
+            - { name: CLAMAV_NO_CLAMD,       value: "false" }
+            - { name: CLAMAV_NO_FRESHCLAMD,  value: "false" }
+            - { name: CLAMAV_NO_MILTERD,     value: "true" }
+            - { name: FRESHCLAM_CHECKS,      value: "12" }
+          volumeMounts:
+            - name: config
+              mountPath: /etc/clamav/clamd.conf
+              subPath: clamd.conf
+              readOnly: true
+            - name: config
+              mountPath: /etc/clamav/freshclam.conf
+              subPath: freshclam.conf
+              readOnly: true
+            - name: signatures
+              mountPath: /var/lib/clamav
+            - name: tmp
+              mountPath: /tmp
+            - name: logs
+              mountPath: /var/log/clamav
+          startupProbe:
+            tcpSocket: { port: clamd }
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 120     # 20 min budget for first sig download
+            timeoutSeconds: 5
+          readinessProbe:
+            tcpSocket: { port: clamd }
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            failureThreshold: 60
+            timeoutSeconds: 5
+          livenessProbe:
+            tcpSocket: { port: clamd }
+            initialDelaySeconds: 900
+            periodSeconds: 60
+            failureThreshold: 5
+            timeoutSeconds: 10
+          resources:
+            {{- toYaml .Values.clamav.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ $fullname }}
+        - name: signatures
+          emptyDir: { sizeLimit: {{ .Values.clamav.signaturesEmptyDirSize }} }
+        - name: tmp
+          emptyDir: { sizeLimit: 256Mi }
+        - name: logs
+          emptyDir: { sizeLimit: 64Mi }
+{{- end }}

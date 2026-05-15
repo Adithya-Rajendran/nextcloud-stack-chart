@@ -1,0 +1,17 @@
+{{- if .Values.valkey.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "nextcloud-stack.valkey.fullname" . }}
+  labels:
+    {{- include "nextcloud-stack.valkey.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "nextcloud-stack.valkey.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: valkey
+      port: {{ .Values.valkey.service.port }}
+      targetPort: {{ .Values.valkey.service.port }}
+      protocol: TCP
+{{- end }}

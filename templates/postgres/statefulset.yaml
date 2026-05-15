@@ -1,0 +1,108 @@
+{{- if .Values.postgres.enabled }}
+{{/*
+Postgres StatefulSet. Single replica, RWO Cinder, retain SC. Stable name
+matters because Nextcloud's connection string points at this pod by DNS.
+
+The initdb script (templates/postgres/configmap-initdb.yaml) runs on first
+boot only and creates the nextcloud db + user with correct schema ownership.
+*/}}
+{{- include "nextcloud-stack.requireSecret" (dict "existing" .Values.postgres.auth.existingSecret "section" "postgres.auth") -}}
+{{- $fullname := include "nextcloud-stack.postgres.fullname" . -}}
+{{- $dbSecret := include "nextcloud-stack.secretName" (dict "existing" .Values.postgres.auth.existingSecret "default" (printf "%s-postgres" (include "nextcloud-stack.fullname" .))) -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "nextcloud-stack.postgres.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ $fullname }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "nextcloud-stack.postgres.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "nextcloud-stack.postgres.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- include "nextcloud-stack.imagePullSecrets" . | nindent 6 }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.postgres.podSecurityContext | nindent 8 }}
+      containers:
+        - name: postgres
+          image: {{ include "nextcloud-stack.image" .Values.postgres.image }}
+          imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.postgres.containerSecurityContext | nindent 12 }}
+          env:
+            # Bootstrap directly as the nextcloud user/db. DHI postgres does
+            # NOT honor /docker-entrypoint-initdb.d/, so we can't run a separate
+            # CREATE USER script. The upstream POSTGRES_USER env var is the
+            # canonical (and DHI-supported) way to bootstrap. As the bootstrap
+            # superuser, nextcloud owns the database AND the public schema —
+            # the Postgres-15+ schema-permission gotcha vanishes.
+            - name: POSTGRES_USER
+              value: {{ .Values.postgres.auth.username | quote }}
+            - name: POSTGRES_DB
+              value: {{ .Values.postgres.auth.database | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ $dbSecret }}, key: nextcloud-db-password } }
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - name: postgres
+              containerPort: {{ .Values.postgres.service.port }}
+              protocol: TCP
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: tmp
+              mountPath: /tmp
+            - name: run
+              mountPath: /var/run/postgresql
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "{{ .Values.postgres.auth.username }}", "-d", "{{ .Values.postgres.auth.database }}"]
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "{{ .Values.postgres.auth.username }}", "-d", "{{ .Values.postgres.auth.database }}"]
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          startupProbe:
+            exec:
+              command: ["pg_isready", "-U", "{{ .Values.postgres.auth.username }}", "-d", "{{ .Values.postgres.auth.database }}"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 60     # 5 min for initdb on first install
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.postgres.resources | nindent 12 }}
+      volumes:
+        - name: tmp
+          emptyDir: { sizeLimit: 256Mi }
+        - name: run
+          emptyDir: { sizeLimit: 64Mi }
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "nextcloud-stack.postgres.labels" . | nindent 10 }}
+        annotations:
+          # PVC outlives the StatefulSet — explicit delete required to drop data.
+          helm.sh/resource-policy: keep
+      spec:
+        accessModes:
+          {{- range .Values.postgres.persistence.accessModes }}
+          - {{ . }}
+          {{- end }}
+        storageClassName: {{ .Values.postgres.persistence.storageClassName }}
+        resources:
+          requests:
+            storage: {{ .Values.postgres.persistence.size }}
+{{- end }}

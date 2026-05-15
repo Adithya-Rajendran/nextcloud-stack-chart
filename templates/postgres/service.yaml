@@ -1,0 +1,23 @@
+{{- if .Values.postgres.enabled }}
+{{/*
+Headless Service for the Postgres StatefulSet — gives a stable DNS name
+("<fullname>-postgres") that resolves to the pod IPs. Single-pod, so it
+effectively resolves to one IP.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "nextcloud-stack.postgres.fullname" . }}
+  labels:
+    {{- include "nextcloud-stack.postgres.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  selector:
+    {{- include "nextcloud-stack.postgres.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: postgres
+      port: {{ .Values.postgres.service.port }}
+      targetPort: {{ .Values.postgres.service.port }}
+      protocol: TCP
+{{- end }}

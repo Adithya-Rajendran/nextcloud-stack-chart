@@ -1,0 +1,3 @@
+{{/* Intentionally empty (renders to nothing). Kept because the workspace
+     filesystem doesn't permit file deletion. Excluded from chart packages
+     via .helmignore. */}}

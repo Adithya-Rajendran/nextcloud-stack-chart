@@ -1,0 +1,102 @@
+{{- if .Values.valkey.enabled }}
+{{- if .Values.valkey.auth.enabled -}}
+{{- include "nextcloud-stack.requireSecret" (dict "existing" .Values.valkey.auth.existingSecret "section" "valkey.auth") -}}
+{{- end -}}
+{{- $fullname := include "nextcloud-stack.valkey.fullname" . -}}
+{{- $valkeySecret := include "nextcloud-stack.secretName" (dict "existing" .Values.valkey.auth.existingSecret "default" (printf "%s-valkey" (include "nextcloud-stack.fullname" .))) -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "nextcloud-stack.valkey.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "nextcloud-stack.valkey.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "nextcloud-stack.valkey.selectorLabels" . | nindent 8 }}
+      annotations:
+        # Roll on chart-managed config change. Secret rotation is external —
+        # if you rotate the valkey-* Secret, restart the pod manually or add
+        # an annotation via podAnnotations.
+        chart/managed: "true"  # placeholder so 'annotations:' is non-empty
+    spec:
+      {{- include "nextcloud-stack.imagePullSecrets" . | nindent 6 }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.valkey.podSecurityContext | nindent 8 }}
+      containers:
+        - name: valkey
+          image: {{ include "nextcloud-stack.image" .Values.valkey.image }}
+          imagePullPolicy: {{ .Values.valkey.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.valkey.containerSecurityContext | nindent 12 }}
+          {{- if .Values.valkey.auth.enabled }}
+          command: ["valkey-server", "/etc/valkey/valkey.conf"]
+          {{- else }}
+          # Auth disabled — use a minimal command-line config.
+          command:
+            - valkey-server
+            - --bind
+            - "0.0.0.0"
+            - "-::*"
+            - --port
+            - {{ .Values.valkey.service.port | quote }}
+            - --protected-mode
+            - "yes"
+            - --save
+            - ""
+            - --appendonly
+            - "no"
+            - --maxmemory
+            - "256mb"
+            - --maxmemory-policy
+            - "allkeys-lru"
+          {{- end }}
+          ports:
+            - name: valkey
+              containerPort: {{ .Values.valkey.service.port }}
+              protocol: TCP
+          {{- if .Values.valkey.auth.enabled }}
+          volumeMounts:
+            - name: valkey-conf
+              mountPath: /etc/valkey
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          {{- else }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          {{- end }}
+          livenessProbe:
+            tcpSocket: { port: valkey }
+            periodSeconds: 30
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            tcpSocket: { port: valkey }
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.valkey.resources | nindent 12 }}
+      volumes:
+        {{- if .Values.valkey.auth.enabled }}
+        - name: valkey-conf
+          secret:
+            secretName: {{ $valkeySecret }}
+            items:
+              - key: valkey.conf
+                path: valkey.conf
+            defaultMode: 0440
+        {{- end }}
+        - name: tmp
+          emptyDir: { sizeLimit: 64Mi }
+{{- end }}

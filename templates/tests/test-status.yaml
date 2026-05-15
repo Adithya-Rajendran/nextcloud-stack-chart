@@ -1,0 +1,59 @@
+{{- if .Values.tests.enabled }}
+{{/*
+helm test target. Hits /status.php on the in-cluster Service.
+
+dhi.io/curl:8-alpine3.23 is shell-less — there's no /bin/sh, no echo, no grep.
+We can't run the previous `sh -c | curl ... | grep installed:true` pipeline.
+Instead: rely on curl's HTTP-status-based --fail. /status.php returns 200 once
+Nextcloud's entrypoint completes installation; the Service's own readinessProbe
+already validates 'installed:true' on the same endpoint, so reaching this point
+means the Pod is installed. The helm test only proves DNS + Service routing.
+*/}}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-test-status
+  labels:
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: test
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  {{- include "nextcloud-stack.imagePullSecrets" . | nindent 2 }}
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: curl
+      image: {{ include "nextcloud-stack.image" .Values.tests.image }}
+      imagePullPolicy: {{ .Values.tests.image.pullPolicy }}
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      # dhi.io/curl alpine entrypoint is `curl`. Pass args directly.
+      args:
+        - --silent
+        - --show-error
+        - --fail
+        - --output
+        - /dev/null
+        - --connect-timeout
+        - "10"
+        - --max-time
+        - "30"
+        - http://{{ include "nextcloud-stack.nextcloud.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.nextcloud.service.port }}/status.php
+      volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+  volumes:
+    - name: tmp
+      emptyDir: { sizeLimit: 16Mi }
+{{- end }}

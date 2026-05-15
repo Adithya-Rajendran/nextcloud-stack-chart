@@ -1,0 +1,50 @@
+{{/*
+PVCs for the Nextcloud webroot and data directory. Both RWO Cinder, retain SC.
+
+If `existingClaim` is set on either, no PVC is rendered — the Deployment uses
+the named existing PVC. This is the migration handle for Phase 2 of the cutover
+plan: reattach the existing aio-namespace PVCs to the new chart's Pod.
+
+`helm.sh/resource-policy: keep` keeps the PVCs after `helm uninstall` so a
+fresh re-install can reattach the data. To actually delete, run
+`kubectl delete pvc -n <ns> <pvc-name>` explicitly.
+*/}}
+{{- if not .Values.nextcloud.persistence.webroot.existingClaim }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-webroot
+  labels:
+    {{- include "nextcloud-stack.nextcloud.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    {{- range .Values.nextcloud.persistence.webroot.accessModes }}
+    - {{ . }}
+    {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.nextcloud.persistence.webroot.size }}
+  storageClassName: {{ .Values.nextcloud.persistence.webroot.storageClassName }}
+{{- end }}
+---
+{{- if not .Values.nextcloud.persistence.data.existingClaim }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-data
+  labels:
+    {{- include "nextcloud-stack.nextcloud.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    {{- range .Values.nextcloud.persistence.data.accessModes }}
+    - {{ . }}
+    {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.nextcloud.persistence.data.size }}
+  storageClassName: {{ .Values.nextcloud.persistence.data.storageClassName }}
+{{- end }}

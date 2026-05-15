@@ -1,0 +1,18 @@
+{{/*
+PHP custom.ini — mounted at /usr/local/etc/php/conf.d/custom.ini inside the
+fpm container. Picked up by php-fpm at startup; no restart hack needed.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-php-ini
+  labels:
+    {{- include "nextcloud-stack.nextcloud.labels" . | nindent 4 }}
+data:
+  custom.ini: |
+    ; Managed by the nextcloud-stack chart. Edit `nextcloud.settings.customPhp`
+    ; in values.yaml to change.
+    upload_max_filesize = {{ .Values.nextcloud.settings.maxFileUploadSize }}
+    post_max_size       = {{ .Values.nextcloud.settings.maxFileUploadSize }}
+    memory_limit        = {{ .Values.nextcloud.settings.memoryLimit }}
+{{ .Values.nextcloud.settings.customPhp | indent 4 }}

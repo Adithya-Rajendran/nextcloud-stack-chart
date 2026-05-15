@@ -1,0 +1,234 @@
+{{- if .Values.networkPolicy.enabled }}
+{{/*
+NetworkPolicies — default-deny + per-component allows.
+
+Public exposure ⇒ NetworkPolicies are part of the threat model. These restrict
+which pods can talk to which others, preventing a compromised sidecar (or
+operator-bot) in another namespace from reaching the database directly.
+
+The chart assumes Cilium semantics; standard NetworkPolicy v1 syntax is used
+so any conformant CNI (Calico, Cilium, etc.) will enforce them.
+*/}}
+
+# ---- default-deny in this namespace -----------------------------------------
+# Excludes the kubectl-using pods (cron, db-migrate). Those need to reach
+# the kube-apiserver, which Cilium classifies as the `kube-apiserver` entity
+# and NetworkPolicy v1 ipBlock rules don't apply to. Their RBAC scope
+# (pods/exec on nextcloud Deployment only) is the actual security constraint.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-default-deny
+  labels:
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values: ["nextcloud-cron", "nextcloud-db-migrate"]
+  policyTypes:
+    - Ingress
+    - Egress
+
+---
+# ---- Nextcloud: ingress from cf-tunnel, egress to deps + DNS + internet -----
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "nextcloud-stack.nextcloud.fullname" . }}
+  labels:
+    {{- include "nextcloud-stack.nextcloud.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "nextcloud-stack.nextcloud.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.cfTunnel.namespace }}
+          podSelector:
+            matchLabels:
+              {{ .Values.networkPolicy.cfTunnel.podLabel.key }}: {{ .Values.networkPolicy.cfTunnel.podLabel.value }}
+      ports:
+        - port: {{ .Values.nextcloud.service.targetPort }}
+          protocol: TCP
+    # Allow same-namespace ingress so the CronJob/Migrate pods can reach the
+    # exec endpoint via the apiserver (apiserver -> kubelet -> pod is its own
+    # path, not constrained by NetworkPolicy, but in-cluster Service traffic
+    # from helm-test or in-namespace probes might be).
+    - from:
+        - podSelector: {}
+  egress:
+    # DNS
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # Postgres
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "nextcloud-stack.postgres.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: {{ .Values.postgres.service.port }}
+          protocol: TCP
+    # Valkey
+    {{- if .Values.valkey.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "nextcloud-stack.valkey.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: {{ .Values.valkey.service.port }}
+          protocol: TCP
+    {{- end }}
+    # ClamAV
+    {{- if .Values.clamav.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "nextcloud-stack.clamav.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: {{ .Values.clamav.service.port }}
+          protocol: TCP
+    {{- end }}
+    {{- if .Values.networkPolicy.allowAllEgress }}
+    # Public internet (app updates, federation, etc.). Lock down by setting
+    # networkPolicy.allowAllEgress: false.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              # Block in-cluster pod CIDR — egress to in-cluster IPs must go
+              # through the explicit per-service rules above.
+              - {{ .Values.nextcloud.web.realIp.trustedCidr }}
+      ports:
+        - port: 443
+          protocol: TCP
+        - port: 80
+          protocol: TCP
+    {{- end }}
+
+---
+# ---- Postgres: ingress from Nextcloud only ---------------------------------
+{{- if .Values.postgres.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "nextcloud-stack.postgres.fullname" . }}
+  labels:
+    {{- include "nextcloud-stack.postgres.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "nextcloud-stack.postgres.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # From the Nextcloud pod.
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "nextcloud-stack.nextcloud.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: {{ .Values.postgres.service.port }}
+          protocol: TCP
+  egress:
+    # DNS for self.
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+{{- end }}
+
+---
+# ---- Valkey: ingress from Nextcloud only -----------------------------------
+{{- if .Values.valkey.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "nextcloud-stack.valkey.fullname" . }}
+  labels:
+    {{- include "nextcloud-stack.valkey.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "nextcloud-stack.valkey.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "nextcloud-stack.nextcloud.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: {{ .Values.valkey.service.port }}
+          protocol: TCP
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+{{- end }}
+
+---
+# ---- ClamAV: ingress from Nextcloud, egress to internet for freshclam ------
+{{- if .Values.clamav.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "nextcloud-stack.clamav.fullname" . }}
+  labels:
+    {{- include "nextcloud-stack.clamav.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "nextcloud-stack.clamav.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "nextcloud-stack.nextcloud.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: {{ .Values.clamav.service.port }}
+          protocol: TCP
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # freshclam pulls signatures from public mirrors.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - {{ .Values.nextcloud.web.realIp.trustedCidr }}
+      ports:
+        - port: 443
+          protocol: TCP
+        - port: 80
+          protocol: TCP
+{{- end }}
+{{- end }}

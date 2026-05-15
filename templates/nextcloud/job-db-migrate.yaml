@@ -1,0 +1,148 @@
+{{- if .Values.nextcloud.dbMigrateJob.enabled }}
+{{/*
+DB-migration Job. Runs the 4 idempotent `occ db:add-missing-*` commands.
+
+Helm hook: post-install,post-upgrade (weight 10 — after schema-fix at -5).
+
+Why post-upgrade (not pre-upgrade):
+  - Pre-upgrade fires BEFORE Helm rolls the new image. Migrations would run
+    against the old code, which is wrong.
+  - Post-upgrade fires after the new Pod is rolled in. Correct timing.
+
+Why kubectl exec (not a Pod that mounts the PVC):
+  - The PVC is RWO Cinder and the live Pod has it. A second mount fails
+    Multi-Attach (the v1.11 bug). Exec sidesteps the volume entirely.
+
+Pod layout with distroless kubectl (dhi.io/kubectl:1, no /bin/sh):
+  - initContainer `wait`: kubectl args only, blocks on `rollout status`.
+  - main container `migrate`: one kubectl exec into the nextcloud-fpm Pod
+    (which DOES have bash) and runs the migration loop inside it via
+    `sh -c <heredoc>`. Outer pod never invokes a shell.
+*/}}
+{{- $fullname := include "nextcloud-stack.nextcloud.fullname" . -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $fullname }}-db-migrate
+  labels:
+    {{- include "nextcloud-stack.nextcloud.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "10"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: {{ .Values.nextcloud.dbMigrateJob.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.nextcloud.dbMigrateJob.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        {{- include "nextcloud-stack.nextcloud.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: nextcloud-db-migrate
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ include "nextcloud-stack.fullname" . }}-occ
+      {{- include "nextcloud-stack.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # Wait for the deployment to be Available before running migrations.
+        - name: wait-for-rollout
+          image: {{ include "nextcloud-stack.image" .Values.nextcloud.kubectl.image }}
+          imagePullPolicy: {{ .Values.nextcloud.kubectl.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          args:
+            - rollout
+            - status
+            - --namespace
+            - {{ .Release.Namespace }}
+            - deploy/{{ $fullname }}
+            - --timeout=300s
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits:   { cpu: 200m, memory: 128Mi }
+          volumeMounts:
+            - { name: tmp,  mountPath: /tmp }
+            - { name: kube, mountPath: /.kube }
+      containers:
+        - name: migrate
+          image: {{ include "nextcloud-stack.image" .Values.nextcloud.kubectl.image }}
+          imagePullPolicy: {{ .Values.nextcloud.kubectl.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          # One `kubectl exec` — all multi-step logic runs INSIDE the nextcloud
+          # pod (which has bash). The outer pod never invokes a shell.
+          args:
+            - exec
+            - --namespace
+            - {{ .Release.Namespace }}
+            - deploy/{{ $fullname }}
+            - --container
+            - php
+            - --
+            - sh
+            - -c
+            - |
+              set -eu
+
+              # ---- DB migrations (idempotent) -------------------------------
+              for cmd in \
+                db:add-missing-indices \
+                db:add-missing-columns \
+                db:add-missing-primary-keys \
+                db:convert-filecache-bigint
+              do
+                echo "==> occ $cmd"
+                php -f /var/www/html/occ -- "$cmd" -n
+              done
+
+              # ---- Mimetype + general repairs (idempotent) ------------------
+              # Clears the "Mimetype migrations available" admin warning. No-op
+              # once it's been run on the current schema version.
+              echo "==> occ maintenance:repair --include-expensive"
+              php -f /var/www/html/occ -- maintenance:repair --include-expensive -n || true
+
+{{- if .Values.clamav.enabled }}
+              # ---- ClamAV antivirus app + config (idempotent) ---------------
+              # files_antivirus settings live in oc_appconfig, not config.php.
+              # `app:install` errors if the app is already enabled — swallow it.
+              echo "==> ensuring files_antivirus app is installed"
+              php -f /var/www/html/occ -- app:install files_antivirus -n 2>/dev/null || \
+                php -f /var/www/html/occ -- app:enable  files_antivirus -n
+              for kv in \
+                "av_mode daemon" \
+                "av_host {{ include "nextcloud-stack.clamav.host" . }}" \
+                "av_port {{ .Values.clamav.service.port | int }}" \
+                "av_stream_max_length 26214400" \
+                "av_max_file_size -1" \
+                "av_infected_action only_log" \
+                "av_scan_first_bytes -1"
+              do
+                key="${kv%% *}"; val="${kv#* }"
+                php -f /var/www/html/occ -- config:app:set files_antivirus "$key" --value="$val" -n
+              done
+{{- end }}
+
+              echo "db-migrate: OK"
+          resources:
+            {{- toYaml .Values.nextcloud.dbMigrateJob.resources | nindent 12 }}
+          volumeMounts:
+            - { name: tmp,  mountPath: /tmp }
+            - { name: kube, mountPath: /.kube }
+      volumes:
+        - name: tmp
+          emptyDir: { sizeLimit: 64Mi }
+        - name: kube
+          emptyDir: { sizeLimit: 64Mi }
+{{- end }}

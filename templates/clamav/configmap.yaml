@@ -1,0 +1,70 @@
+{{- if .Values.clamav.enabled }}
+{{/*
+ClamAV config — folded in from manifests/clamav/clamav.yaml. The Nextcloud
+files_antivirus app talks to this Service on port {{ .Values.clamav.service.port }}.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "nextcloud-stack.clamav.fullname" . }}
+  labels:
+    {{- include "nextcloud-stack.clamav.labels" . | nindent 4 }}
+data:
+  clamd.conf: |
+    LogTime yes
+    LogVerbose no
+    LogClean no
+    LogFileMaxSize 10M
+    LogRotate yes
+
+    LocalSocket /tmp/clamd.sock
+    LocalSocketMode 660
+
+    TCPSocket {{ .Values.clamav.service.port }}
+    TCPAddr 0.0.0.0
+
+    MaxConnectionQueueLength 200
+    MaxThreads 12
+    ReadTimeout 600
+    CommandReadTimeout 30
+    SendBufTimeout 200
+    MaxQueue 100
+    IdleTimeout 30
+
+    StreamMaxLength 256M
+    MaxFileSize 256M
+    MaxScanSize 512M
+    MaxRecursion 16
+    MaxFiles 10000
+    MaxEmbeddedPE 40M
+    MaxHTMLNormalize 40M
+    MaxHTMLNoTags 8M
+    MaxScriptNormalize 20M
+    MaxZipTypeRcg 1M
+
+    User clamav
+    AllowSupplementaryGroups yes
+
+    DetectPUA no
+    ScanPDF yes
+    ScanXMLDOCS yes
+    ScanHWP3 yes
+    ScanSWF yes
+    ScanMail yes
+    ScanArchive yes
+    ArchiveBlockEncrypted no
+    HeuristicAlerts yes
+    ScanOnAccess no
+  freshclam.conf: |
+    DatabaseDirectory /var/lib/clamav
+    UpdateLogFile /var/log/clamav/freshclam.log
+    LogVerbose no
+    LogTime yes
+    LogFileMaxSize 10M
+    LogRotate yes
+    DatabaseOwner clamav
+    DatabaseMirror database.clamav.net
+    Bytecode yes
+    NotifyClamd /etc/clamav/clamd.conf
+    Checks 24
+{{- end }}

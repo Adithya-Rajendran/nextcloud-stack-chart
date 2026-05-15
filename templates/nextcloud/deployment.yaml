@@ -1,0 +1,249 @@
+{{/*
+Nextcloud Deployment — single Pod with two containers sharing the webroot PVC:
+  - php (fpm) — listens 127.0.0.1:9000, owns /var/www/html
+  - web (nginx) — listens :8080, mounts webroot readOnly
+
+Strategy is Recreate because RWO Cinder can't be Multi-Attached during a rolling
+upgrade. Single replica is enforced.
+*/}}
+{{- include "nextcloud-stack.requireSecret" (dict "existing" .Values.nextcloud.admin.existingSecret "section" "nextcloud.admin") -}}
+{{- include "nextcloud-stack.requireSecret" (dict "existing" .Values.postgres.auth.existingSecret "section" "postgres.auth") -}}
+{{- if and .Values.valkey.enabled .Values.valkey.auth.enabled -}}
+{{- include "nextcloud-stack.requireSecret" (dict "existing" .Values.valkey.auth.existingSecret "section" "valkey.auth") -}}
+{{- end -}}
+{{- $fullname := include "nextcloud-stack.nextcloud.fullname" . -}}
+{{- $adminSecret := include "nextcloud-stack.secretName" (dict "existing" .Values.nextcloud.admin.existingSecret "default" (printf "%s-admin" (include "nextcloud-stack.fullname" .))) -}}
+{{- $dbSecret := include "nextcloud-stack.secretName" (dict "existing" .Values.postgres.auth.existingSecret "default" (printf "%s-postgres" (include "nextcloud-stack.fullname" .))) -}}
+{{- $valkeySecret := include "nextcloud-stack.secretName" (dict "existing" .Values.valkey.auth.existingSecret "default" (printf "%s-valkey" (include "nextcloud-stack.fullname" .))) -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "nextcloud-stack.nextcloud.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.nextcloud.replicas }}
+  strategy:
+    type: {{ .Values.nextcloud.strategy.type }}
+  selector:
+    matchLabels:
+      {{- include "nextcloud-stack.nextcloud.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "nextcloud-stack.nextcloud.selectorLabels" . | nindent 8 }}
+        {{- with .Values.nextcloud.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        # Roll the pod when any of the chart-managed configs/secret data change.
+        checksum/config:    {{ include (print $.Template.BasePath "/nextcloud/configmap-config.yaml") . | sha256sum }}
+        checksum/nginx:     {{ include (print $.Template.BasePath "/nextcloud/configmap-nginx.yaml") . | sha256sum }}
+        checksum/php-ini:   {{ include (print $.Template.BasePath "/nextcloud/configmap-php-ini.yaml") . | sha256sum }}
+        checksum/hooks:     {{ include (print $.Template.BasePath "/nextcloud/configmap-hooks.yaml") . | sha256sum }}
+        {{- with .Values.nextcloud.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- include "nextcloud-stack.imagePullSecrets" . | nindent 6 }}
+      # 120s lets in-flight file uploads finish before SIGKILL. Defaults to
+      # 30s, which silently truncates uploads on rolling restarts.
+      terminationGracePeriodSeconds: 120
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.nextcloud.podSecurityContext | nindent 8 }}
+      # Init: wait for Postgres + Valkey before fpm starts.
+      initContainers:
+        - name: wait-for-postgres
+          # Use the postgres image — has pg_isready AND a shell (for the loop).
+          # nginx:1-compat is busybox sh, which doesn't support bash's /dev/tcp.
+          image: {{ include "nextcloud-stack.image" .Values.postgres.image }}
+          imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              host="{{ include "nextcloud-stack.postgres.host" . }}"
+              port="{{ .Values.postgres.service.port }}"
+              echo "Waiting for $host:$port ..."
+              for i in $(seq 1 60); do
+                if pg_isready -h "$host" -p "$port" -q; then
+                  echo "$host:$port reachable"; exit 0
+                fi
+                sleep 2
+              done
+              echo "Timed out waiting for $host:$port" >&2
+              exit 1
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 70       # dhi.io/postgres UID
+            runAsGroup: 70
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits:   { cpu: 100m, memory: 64Mi }
+      containers:
+        # ---- PHP-FPM ----------------------------------------------------------
+        - name: php
+          image: {{ include "nextcloud-stack.image" .Values.nextcloud.image }}
+          imagePullPolicy: {{ .Values.nextcloud.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.nextcloud.containerSecurityContext.php | nindent 12 }}
+          env:
+            # The upstream image's entrypoint reads these and writes config.php
+            # on first install. Subsequent boots use the existing config.php.
+            - name: NEXTCLOUD_TRUSTED_DOMAINS
+              value: {{ join " " .Values.nextcloud.settings.trustedDomains | quote }}
+            - name: NEXTCLOUD_ADMIN_USER
+              valueFrom: { secretKeyRef: { name: {{ $adminSecret }}, key: admin-user } }
+            - name: NEXTCLOUD_ADMIN_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ $adminSecret }}, key: admin-password } }
+            - name: NEXTCLOUD_DATA_DIR
+              value: /var/www/html/data
+            - name: OVERWRITEHOST
+              value: {{ .Values.nextcloud.settings.overwriteHost | quote }}
+            - name: OVERWRITEPROTOCOL
+              value: {{ .Values.nextcloud.settings.overwriteProtocol | quote }}
+            - name: OVERWRITECLIURL
+              value: {{ include "nextcloud-stack.overwriteCliUrl" . | quote }}
+            # Postgres connection
+            - name: POSTGRES_HOST
+              value: {{ include "nextcloud-stack.postgres.host" . }}
+            - name: POSTGRES_DB
+              value: {{ .Values.postgres.auth.database | quote }}
+            - name: POSTGRES_USER
+              value: {{ .Values.postgres.auth.username | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ $dbSecret }}, key: nextcloud-db-password } }
+{{- if and .Values.valkey.enabled .Values.valkey.auth.enabled }}
+            # Valkey: password is referenced by config.php overlay via getenv().
+            # We deliberately do NOT set REDIS_HOST here — the upstream fpm
+            # entrypoint sees it and tries to write redis-session.ini into
+            # /usr/local/etc/php/conf.d/ which is root-owned (we run non-root).
+            # Host + port are templated into zz-chart.config.php literally.
+            - name: REDIS_HOST_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ $valkeySecret }}, key: valkey-password } }
+{{- end }}
+          ports:
+            - name: fpm
+              containerPort: 9000
+              protocol: TCP
+          volumeMounts:
+            - name: webroot
+              mountPath: /var/www/html
+            - name: data
+              mountPath: /var/www/html/data
+            - name: php-ini
+              mountPath: /usr/local/etc/php/conf.d/custom.ini
+              subPath: custom.ini
+              readOnly: true
+            - name: chart-config
+              mountPath: /etc/nextcloud-stack
+              readOnly: true
+            - name: chart-hooks
+              mountPath: /docker-entrypoint-hooks.d/before-starting
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          startupProbe:
+            tcpSocket: { port: fpm }
+            # First install copies ~250 MB of Nextcloud source onto the PVC and
+            # runs `occ maintenance:install`. Generous startup budget.
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 120    # 10 min budget
+            timeoutSeconds: 3
+          livenessProbe:
+            tcpSocket: { port: fpm }
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            tcpSocket: { port: fpm }
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.nextcloud.resources | nindent 12 }}
+        # ---- NGINX ------------------------------------------------------------
+        - name: web
+          image: {{ include "nextcloud-stack.image" .Values.nextcloud.web.image }}
+          imagePullPolicy: {{ .Values.nextcloud.web.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.nextcloud.containerSecurityContext.web | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.nextcloud.service.targetPort }}
+              protocol: TCP
+          volumeMounts:
+            - name: webroot
+              mountPath: /var/www/html
+              readOnly: true
+            - name: nginx-conf
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+              readOnly: true
+            - name: nginx-tmp
+              mountPath: /tmp
+            - name: nginx-cache
+              mountPath: /var/cache/nginx
+            - name: nginx-log
+              mountPath: /var/log/nginx
+          startupProbe:
+            # /status.php is the most reliable readiness signal (returns
+            # installed:true once setup finished).
+            httpGet:
+              path: /status.php
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 120
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /status.php
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /status.php
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.nextcloud.web.resources | nindent 12 }}
+      volumes:
+        - name: webroot
+          persistentVolumeClaim:
+            claimName: {{ default (printf "%s-webroot" (include "nextcloud-stack.fullname" .)) .Values.nextcloud.persistence.webroot.existingClaim }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ default (printf "%s-data" (include "nextcloud-stack.fullname" .)) .Values.nextcloud.persistence.data.existingClaim }}
+        - name: php-ini
+          configMap:
+            name: {{ include "nextcloud-stack.fullname" . }}-php-ini
+        - name: chart-config
+          configMap:
+            name: {{ include "nextcloud-stack.fullname" . }}-config
+        - name: chart-hooks
+          configMap:
+            name: {{ include "nextcloud-stack.fullname" . }}-hooks
+            defaultMode: 0755
+        - name: nginx-conf
+          configMap:
+            name: {{ include "nextcloud-stack.fullname" . }}-nginx
+        - name: tmp
+          emptyDir: { sizeLimit: 1Gi }
+        - name: nginx-tmp
+          emptyDir: { sizeLimit: 64Mi }
+        - name: nginx-cache
+          emptyDir: { sizeLimit: 256Mi }
+        - name: nginx-log
+          emptyDir: { sizeLimit: 64Mi }

@@ -1,0 +1,26 @@
+{{/*
+ClusterIP Service that cloudflared targets. Routes :{{ .Values.nextcloud.service.port }}
+on the Service to :{{ .Values.nextcloud.service.targetPort }} on the nginx container.
+
+Service name: matches the chart fullname — update the CF Public Hostname target
+to `http://<svc>.<ns>.svc.cluster.local:80` after install.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "nextcloud-stack.nextcloud.fullname" . }}
+  labels:
+    {{- include "nextcloud-stack.nextcloud.labels" . | nindent 4 }}
+  {{- with .Values.nextcloud.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.nextcloud.service.type }}
+  selector:
+    {{- include "nextcloud-stack.nextcloud.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.nextcloud.service.port }}
+      targetPort: {{ .Values.nextcloud.service.targetPort }}
+      protocol: TCP

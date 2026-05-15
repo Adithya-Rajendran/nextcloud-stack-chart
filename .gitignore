@@ -1,0 +1,15 @@
+﻿# Local Helm overrides — never commit
+values.local.yaml
+*.local.yaml
+*-secrets.yaml
+secrets/
+
+# Helm packaging artifacts
+charts/
+*.tgz
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

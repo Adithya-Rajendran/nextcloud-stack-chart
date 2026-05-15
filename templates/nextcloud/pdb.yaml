@@ -1,0 +1,23 @@
+{{- if .Values.nextcloud.pdb.enabled }}
+{{/*
+PodDisruptionBudget for the Nextcloud Pod.
+
+With a single replica + RWO Cinder + Recreate strategy, this PDB documents
+intent: don't let node drains evict the only Pod without operator awareness.
+`maxUnavailable: 0` means voluntary disruptions (kubectl drain, node upgrade,
+autoscaler scale-down) must be acknowledged via --force or by deleting the PDB.
+
+Set `pdb.enabled: false` for dev/test clusters where you don't care.
+*/}}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "nextcloud-stack.nextcloud.fullname" . }}
+  labels:
+    {{- include "nextcloud-stack.nextcloud.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: {{ .Values.nextcloud.pdb.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "nextcloud-stack.nextcloud.selectorLabels" . | nindent 6 }}
+{{- end }}

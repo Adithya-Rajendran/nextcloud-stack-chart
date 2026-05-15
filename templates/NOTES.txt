@@ -1,0 +1,75 @@
+Nextcloud stack installed.
+
+Release : {{ .Release.Name }}
+Namespace: {{ .Release.Namespace }}
+Chart    : {{ .Chart.Name }}-{{ .Chart.Version }} (Nextcloud {{ .Chart.AppVersion }})
+
+WHAT'S RUNNING
+--------------
+  Deployment/{{ include "nextcloud-stack.nextcloud.fullname" . }}   nginx + php-fpm
+  Service/{{ include "nextcloud-stack.nextcloud.fullname" . }}      ClusterIP :{{ .Values.nextcloud.service.port }}
+{{- if .Values.postgres.enabled }}
+  StatefulSet/{{ include "nextcloud-stack.postgres.fullname" . }}   Postgres 16
+{{- end }}
+{{- if .Values.valkey.enabled }}
+  Deployment/{{ include "nextcloud-stack.valkey.fullname" . }}      Valkey 8 (Redis-compatible)
+{{- end }}
+{{- if .Values.clamav.enabled }}
+  Deployment/{{ include "nextcloud-stack.clamav.fullname" . }}      ClamAV antivirus daemon
+{{- end }}
+
+NEXT STEPS
+----------
+
+1. Watch the rollout:
+
+   kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "nextcloud-stack.nextcloud.fullname" . }} --timeout=600s
+
+2. Check end-to-end health (after Pod is Ready):
+
+   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "nextcloud-stack.nextcloud.fullname" . }} 8080:{{ .Values.nextcloud.service.port }}
+   curl -s http://127.0.0.1:8080/status.php | grep installed
+
+3. Point the Cloudflare Tunnel Public Hostname at the new Service:
+
+   http://{{ include "nextcloud-stack.nextcloud.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.nextcloud.service.port }}
+
+4. First login:
+
+{{- if .Values.nextcloud.admin.existingSecret }}
+   Username: from Secret/{{ .Values.nextcloud.admin.existingSecret }} key `admin-user`
+   Password: from Secret/{{ .Values.nextcloud.admin.existingSecret }} key `admin-password`
+
+   Read them:
+     kubectl -n {{ .Release.Namespace }} get secret {{ .Values.nextcloud.admin.existingSecret }} \
+       -o jsonpath='{.data.admin-password}' | base64 -d
+{{- else }}
+   Username: {{ .Values.nextcloud.admin.name }}
+   Password: stored in Secret/{{ include "nextcloud-stack.fullname" . }}-admin
+
+   Read it:
+     kubectl -n {{ .Release.Namespace }} get secret {{ include "nextcloud-stack.fullname" . }}-admin \
+       -o jsonpath='{.data.admin-password}' | base64 -d
+{{- end }}
+
+   Rotate the password from the web UI immediately. Then enable TOTP/WebAuthn.
+
+5. Verify the real client IP is reaching nginx (not a 10.1.* pod IP):
+
+   kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "nextcloud-stack.nextcloud.fullname" . }} -c web | tail -5
+
+   You should see your CF-Connecting-IP, not the cloudflared pod IP.
+
+6. Run `helm test` for an automated smoke check:
+
+   helm test {{ .Release.Name }} -n {{ .Release.Namespace }}
+
+WHAT'S DIFFERENT FROM GROUNDHOG2K
+---------------------------------
+- nginx (not Apache) reads the real client IP — no more `mod_remoteip` patch.
+- CronJob ships with `concurrencyPolicy: Forbid` — no manual patch needed.
+- DB migrations run as a post-upgrade Hook Job using `kubectl exec` — no
+  more Multi-Attach failure on RWO Cinder.
+- `helm upgrade` is a single command. There is no re-apply checklist.
+
+See `charts/nextcloud-stack/README.md` for more.

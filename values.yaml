@@ -1,0 +1,379 @@
+# nextcloud-stack — default values.
+#
+# Most users override a small subset in a `-f my-values.yaml` file. See
+# `example-values.yaml` next to this file for a realistic configuration that
+# mirrors the previous `secrets/values.override.yaml`.
+#
+# SECURITY MODEL
+# --------------
+# Secrets are EXTERNAL ONLY. Pre-create them with `scripts/bootstrap-secrets.sh`
+# and reference them via `*.auth.existingSecret`. The chart does not auto-generate
+# passwords and does not accept inline password values — both patterns leak
+# plaintext into Helm release metadata. See README.md "Secret management".
+
+# -----------------------------------------------------------------------------
+# Global / cross-cutting
+# -----------------------------------------------------------------------------
+nameOverride: ""
+fullnameOverride: ""
+
+# Common labels added to every resource.
+commonLabels: {}
+
+# Common annotations added to every resource.
+commonAnnotations: {}
+
+# Image-pull secrets (DHI images may need one; cf-tunnel separately).
+imagePullSecrets: []
+# - name: dhi-pull
+
+# -----------------------------------------------------------------------------
+# Nextcloud (php-fpm + nginx)
+# -----------------------------------------------------------------------------
+nextcloud:
+  # -- PHP-FPM container (the only custom image in the chart).
+  image:
+    registry: ghcr.io
+    repository: adithya-rajendran/nextcloud-fpm
+    tag: 33.0.3-fpm
+    pullPolicy: IfNotPresent
+
+  # -- nginx sidecar (upstream, unmodified). Listens on 8080, talks to
+  # 127.0.0.1:9000 over loopback.
+  web:
+    image:
+      registry: dhi.io
+      repository: nginx
+      tag: 1-compat
+      pullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 1
+        memory: 256Mi
+    # nginx serves real client IP from this header, gated by the trusted-CIDR
+    # below. The pair (set_real_ip_from + real_ip_header) replaces the previous
+    # mod_remoteip patch.
+    realIp:
+      trustedCidr: 10.1.0.0/16
+      header: CF-Connecting-IP
+
+  replicas: 1
+  # RWO Cinder + shared PVCs ⇒ Recreate (rolling would Multi-Attach).
+  strategy:
+    type: Recreate
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+
+  podAnnotations: {}
+  podLabels: {}
+
+  # Pod-level security context. fsGroup 33 = www-data so fpm can write
+  # the shared webroot and nginx can mount it readOnly.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 33
+    runAsGroup: 33
+    fsGroup: 33
+    fsGroupChangePolicy: OnRootMismatch
+    seccompProfile:
+      type: RuntimeDefault
+
+  # Per-container security contexts.
+  containerSecurityContext:
+    php:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: false   # fpm writes to a few places in the rootfs
+      runAsNonRoot: true
+      runAsUser: 33
+      runAsGroup: 33
+      capabilities:
+        drop: ["ALL"]
+    web:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      runAsNonRoot: true
+      runAsUser: 65532    # dhi.io/nginx user is 'nonroot' UID 65532
+      runAsGroup: 65532
+      capabilities:
+        drop: ["ALL"]
+
+  # PodDisruptionBudget — documents intent during voluntary disruptions
+  # (node drain, cluster upgrade). With 1 replica + maxUnavailable: 0, drain
+  # operations require explicit --force or PDB deletion. Set enabled: false
+  # for dev/test clusters where uninterrupted nightly drains are fine.
+  pdb:
+    enabled: true
+    maxUnavailable: 0
+
+  # Service in front of the Pod's nginx container.
+  service:
+    type: ClusterIP
+    port: 80
+    # CF-tunnel hits this. Keep at 8080 — matches nginx listener inside the pod.
+    targetPort: 8080
+    annotations: {}
+
+  # Persistence — RWO Cinder.
+  persistence:
+    webroot:
+      enabled: true
+      size: 10Gi
+      storageClassName: csi-cinder-sc-retain
+      accessModes: ["ReadWriteOnce"]
+      # Existing PVC name to mount instead of creating new (Phase 2 migration).
+      existingClaim: ""
+    data:
+      enabled: true
+      size: 100Gi
+      storageClassName: csi-cinder-sc-retain
+      accessModes: ["ReadWriteOnce"]
+      existingClaim: ""
+
+  # Admin user. The existingSecret is required (created by scripts/bootstrap-secrets.sh).
+  # Secret keys expected: `admin-user`, `admin-password`.
+  admin:
+    name: admin
+    existingSecret: ""    # REQUIRED — name of pre-created K8s Secret
+
+  # Server-side settings (templated into a config.php overlay).
+  settings:
+    overwriteHost: drive.alaras.net
+    overwriteProtocol: https
+    overwriteCliUrl: ""   # auto-derived from overwriteHost+Protocol if empty
+    trustedDomains:
+      - localhost
+      - drive.alaras.net
+    trustedProxies:
+      - 10.1.0.0/16
+    forwardedForHeaders:
+      - HTTP_CF_CONNECTING_IP
+    defaultPhoneRegion: US
+    maintenanceWindowStart: 11
+    # Upload / memory tuning.
+    maxFileUploadSize: 16G
+    memoryLimit: 512M
+    # PHP custom.ini settings — keep the security defaults.
+    customPhp: |
+      ; Force Secure flag on session cookies — Nextcloud's __Host- cookie prefix
+      ; only fires when session.cookie_secure is on. cloudflared terminates TLS,
+      ; so the origin sees HTTP but the browser sees HTTPS — Secure flag must be
+      ; explicitly forced. See DEPLOYMENT_PLAN.md §13.2.
+      session.cookie_secure = on
+      session.cookie_samesite = Lax
+
+  # CronJob: occ cron */5 minutes.
+  cronJob:
+    enabled: true
+    schedule: "*/5 * * * *"
+    # IANA timezone (K8s 1.27+). Empty -> cluster default (UTC). Pacific:
+    # timeZone: America/Los_Angeles
+    timeZone: ""
+    # Forbid prevents the oc_filecache_extended PK race seen in v1.9.
+    concurrencyPolicy: Forbid
+    successfulJobsHistoryLimit: 1
+    failedJobsHistoryLimit: 3
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 1
+        memory: 1Gi
+
+  # DB migration Job, run as a post-install / post-upgrade hook.
+  # Idempotent: the four occ db:add-missing-* commands are safe to re-run.
+  # Uses `kubectl exec` into the live Pod — does NOT mount the RWO PVC, so the
+  # v1.11 Multi-Attach failure mode is structurally impossible.
+  # Shared kubectl image used by:
+  #   - templates/nextcloud/cronjob-occ-cron.yaml  (every 5 min)
+  #   - templates/nextcloud/job-db-migrate.yaml    (post-install/upgrade hook)
+  # dhi.io/kubectl:1 is distroless (no /bin/sh). Templates pass kubectl args
+  # directly and run multi-step migrations inside the nextcloud-fpm Pod (which
+  # has bash) via `kubectl exec ... -- sh -c <script>`.
+  kubectl:
+    image:
+      registry: dhi.io
+      repository: kubectl
+      tag: "1"
+      # For supply-chain pinning, set digest (overrides tag if both present):
+      # digest: sha256:abc123...
+      digest: ""
+      pullPolicy: IfNotPresent
+
+  dbMigrateJob:
+    enabled: true
+    resources:
+      requests: { cpu: 50m, memory: 64Mi }
+      limits:   { cpu: 500m, memory: 256Mi }
+    backoffLimit: 3
+    activeDeadlineSeconds: 600
+
+# -----------------------------------------------------------------------------
+# Postgres
+#
+# DHI's postgres image starts at major version 18 (no 16/17 published as of
+# 2026-05). 18 is outside Nextcloud 33.0.3's officially-tested matrix (13-17)
+# but works in practice (no SQL-incompatible changes). Pinning here.
+# If you want a tested version, override to docker.io/library/postgres:17
+# (or :16 to match AFFiNE pgvector:pg16) - lose hardening on this one Pod,
+# gain Nextcloud-vendor support coverage.
+# -----------------------------------------------------------------------------
+postgres:
+  enabled: true
+  image:
+    registry: dhi.io
+    repository: postgres
+    tag: "18"
+    pullPolicy: IfNotPresent
+
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits:   { cpu: "1",  memory: 1Gi }
+
+  # Persistence — RWO Cinder, retain on uninstall.
+  persistence:
+    size: 10Gi
+    storageClassName: csi-cinder-sc-retain
+    accessModes: ["ReadWriteOnce"]
+
+  # Database / user / external Secret reference.
+  # Secret keys expected: `postgres-password` (superuser), `nextcloud-db-password` (app user).
+  auth:
+    database: nextcloud
+    username: nextcloud
+    existingSecret: ""    # REQUIRED — name of pre-created K8s Secret
+
+  # Postgres user/group inside the dhi/postgres image. Standard Postgres image is 999.
+  # DHI postgres user is 'postgres' UID 70 (Wolfi/Alpine convention).
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 70
+    runAsGroup: 70
+    fsGroup: 70
+    fsGroupChangePolicy: OnRootMismatch
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: false
+    capabilities:
+      drop: ["ALL"]
+
+  service:
+    port: 5432
+
+# -----------------------------------------------------------------------------
+# Valkey (Redis wire-compatible)
+# -----------------------------------------------------------------------------
+valkey:
+  enabled: true
+  image:
+    registry: dhi.io
+    repository: valkey
+    tag: "9"
+    pullPolicy: IfNotPresent
+
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits:   { cpu: 500m, memory: 512Mi }
+
+  # Auth. The Secret carries both the password (env-referenced by Nextcloud)
+  # AND a ready-to-mount valkey.conf with requirepass baked in.
+  # Secret keys expected: `valkey-password`, `valkey.conf`.
+  auth:
+    enabled: true
+    existingSecret: ""    # REQUIRED when enabled — name of pre-created K8s Secret
+
+  # No persistence: cache only. csi-cinder-sc-delete would normally apply but
+  # we don't even need a PVC. Use emptyDir.
+  persistence:
+    enabled: false
+
+  # DHI valkey is 'nonroot' UID 65532.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
+
+  service:
+    port: 6379
+
+# -----------------------------------------------------------------------------
+# ClamAV
+# -----------------------------------------------------------------------------
+clamav:
+  enabled: true
+  image:
+    registry: dhi.io
+    repository: clamav
+    tag: 1.5-base
+    pullPolicy: IfNotPresent
+
+  resources:
+    requests: { cpu: 250m, memory: 1Gi }
+    limits:   { cpu: "2",  memory: 3Gi }
+
+  # dhi.io/clamav runs as 'clamav' UID 65532 from the start.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: false  # freshclam writes to /var/lib/clamav
+    capabilities:
+      drop: ["ALL"]
+
+  # Signatures live on emptyDir; freshclam re-downloads (~250 MB) on cold start.
+  # Saves a Cinder volume slot vs. PVC.
+  signaturesEmptyDirSize: 1Gi
+
+  service:
+    port: 3310
+
+# -----------------------------------------------------------------------------
+# NetworkPolicy (publicly-exposed install ⇒ on by default)
+# -----------------------------------------------------------------------------
+networkPolicy:
+  enabled: true
+  # Namespace where cloudflared runs. Only Pods labeled app=cloudflared in this
+  # namespace can reach the nextcloud Service.
+  cfTunnel:
+    namespace: cf-tunnel
+    podLabel:
+      key: app
+      value: cloudflared
+  # Allow egress to the public internet for app updates, federation, etc.
+  # Set to false to lock down further (Nextcloud may surface errors).
+  allowAllEgress: true
+
+# -----------------------------------------------------------------------------
+# Tests (helm test)
+# -----------------------------------------------------------------------------
+tests:
+  enabled: true
+  image:
+    registry: dhi.io
+    repository: curl
+    tag: 8-alpine3.23
+    pullPolicy: IfNotPresent

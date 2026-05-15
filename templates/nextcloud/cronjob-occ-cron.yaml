@@ -1,0 +1,86 @@
+{{- if .Values.nextcloud.cronJob.enabled }}
+{{/*
+occ-cron CronJob. Runs `php occ cron` every 5 minutes via `kubectl exec`
+into the live Nextcloud Pod.
+
+concurrencyPolicy: Forbid prevents the oc_filecache_extended PK race seen
+in DEPLOYMENT_PLAN.md §14.1 (two parallel cron runs on the same global
+filecache row).
+
+The pod uses dhi.io/kubectl:1 (distroless), so command/args are kubectl
+arguments directly — no shell wrapper.
+*/}}
+{{- $fullname := include "nextcloud-stack.nextcloud.fullname" . -}}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $fullname }}-cron
+  labels:
+    {{- include "nextcloud-stack.nextcloud.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.nextcloud.cronJob.schedule | quote }}
+  {{- with .Values.nextcloud.cronJob.timeZone }}
+  timeZone: {{ . | quote }}
+  {{- end }}
+  # If the scheduler can't start the cron pod within this window after its
+  # scheduled time, the run is skipped (instead of piling up indefinitely).
+  startingDeadlineSeconds: 60
+  concurrencyPolicy: {{ .Values.nextcloud.cronJob.concurrencyPolicy }}
+  successfulJobsHistoryLimit: {{ .Values.nextcloud.cronJob.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.nextcloud.cronJob.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 240
+      template:
+        metadata:
+          labels:
+            {{- include "nextcloud-stack.nextcloud.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: nextcloud-cron
+        spec:
+          restartPolicy: Never
+          serviceAccountName: {{ include "nextcloud-stack.fullname" . }}-occ
+          {{- include "nextcloud-stack.imagePullSecrets" . | nindent 10 }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: kubectl
+              image: {{ include "nextcloud-stack.image" .Values.nextcloud.kubectl.image }}
+              imagePullPolicy: {{ .Values.nextcloud.kubectl.image.pullPolicy }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              # dhi.io/kubectl:1 entrypoint is `kubectl`. Pass exec args directly.
+              # Uses /var/www/html/cron.php (the canonical Nextcloud cron entry
+              # point) rather than `occ background:cron` so we don't bind to
+              # the changing occ-subcommand naming across Nextcloud versions.
+              args:
+                - exec
+                - --namespace
+                - {{ .Release.Namespace }}
+                - deploy/{{ $fullname }}
+                - --container
+                - php
+                - --
+                - php
+                - -f
+                - /var/www/html/cron.php
+              resources:
+                {{- toYaml .Values.nextcloud.cronJob.resources | nindent 16 }}
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+                - name: kube
+                  mountPath: /.kube
+          volumes:
+            - name: tmp
+              emptyDir: { sizeLimit: 64Mi }
+            - name: kube
+              emptyDir: { sizeLimit: 64Mi }
+{{- end }}

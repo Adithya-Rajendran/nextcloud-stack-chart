@@ -1,0 +1,33 @@
+{{/*
+before-starting hook for the upstream nextcloud:fpm image. Runs after the
+source tree is in /var/www/html but BEFORE php-fpm starts, on every Pod start.
+
+The image's entrypoint scans /docker-entrypoint-hooks.d/before-starting/*.sh
+and executes each one with sh. defaultMode 0755 on the mount makes them
+executable.
+
+Idempotent: the only effect is overwriting /var/www/html/config/zz-chart.config.php
+with the chart-managed copy. Safe to re-run.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-hooks
+  labels:
+    {{- include "nextcloud-stack.nextcloud.labels" . | nindent 4 }}
+data:
+  10-overlay-chart-config.sh: |
+    #!/bin/sh
+    # Drop the chart-managed config overlay into /var/www/html/config/.
+    # Nextcloud autoloads *.config.php in alphabetical order — zz-* wins.
+    set -eu
+    SRC=/etc/nextcloud-stack/zz-chart.config.php
+    DST=/var/www/html/config/zz-chart.config.php
+    if [ ! -f "$SRC" ]; then
+        echo "before-starting: $SRC missing — skipping overlay copy" >&2
+        exit 0
+    fi
+    mkdir -p /var/www/html/config
+    cp "$SRC" "$DST"
+    chmod 640 "$DST"
+    echo "before-starting: wrote $DST"
