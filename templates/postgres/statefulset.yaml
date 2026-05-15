@@ -28,6 +28,10 @@ spec:
     spec:
       {{- include "nextcloud-stack.imagePullSecrets" . | nindent 6 }}
       automountServiceAccountToken: false
+      # Postgres shutdown writes a checkpoint; on a busy DB or slow Cinder
+      # the default 30s can SIGKILL mid-checkpoint, triggering recovery on
+      # the next boot. 60s covers the realistic shutdown window.
+      terminationGracePeriodSeconds: 60
       securityContext:
         {{- toYaml .Values.postgres.podSecurityContext | nindent 8 }}
       containers:

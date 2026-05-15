@@ -29,6 +29,10 @@ spec:
     spec:
       {{- include "nextcloud-stack.imagePullSecrets" . | nindent 6 }}
       automountServiceAccountToken: false
+      # clamd shutdown can take 10-20s on a populated signature database;
+      # the default 30s can SIGKILL mid-flush and the next boot picks up a
+      # partially-written state file. 60s covers the realistic window.
+      terminationGracePeriodSeconds: 60
       securityContext:
         {{- toYaml .Values.clamav.podSecurityContext | nindent 8 }}
       containers:
