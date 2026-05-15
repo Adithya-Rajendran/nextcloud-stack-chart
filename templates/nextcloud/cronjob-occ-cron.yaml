@@ -34,7 +34,7 @@ spec:
       template:
         metadata:
           labels:
-            {{- include "nextcloud-stack.nextcloud.selectorLabels" . | nindent 12 }}
+            {{- include "nextcloud-stack.selectorLabels" . | nindent 12 }}
             app.kubernetes.io/component: nextcloud-cron
         spec:
           restartPolicy: Never
