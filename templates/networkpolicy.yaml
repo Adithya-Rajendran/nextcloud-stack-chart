@@ -47,6 +47,10 @@ spec:
     - Ingress
     - Egress
   ingress:
+    # Only cloudflared pods in the cf-tunnel namespace. `kubectl exec` from the
+    # cron/migrate Jobs does NOT need an ingress rule here — exec traffic goes
+    # apiserver -> kubelet -> pod, not through the Service, and is not
+    # constrained by NetworkPolicy on the pod-to-pod path.
     - from:
         - namespaceSelector:
             matchLabels:
@@ -57,12 +61,17 @@ spec:
       ports:
         - port: {{ .Values.nextcloud.service.targetPort }}
           protocol: TCP
-    # Allow same-namespace ingress so the CronJob/Migrate pods can reach the
-    # exec endpoint via the apiserver (apiserver -> kubelet -> pod is its own
-    # path, not constrained by NetworkPolicy, but in-cluster Service traffic
-    # from helm-test or in-namespace probes might be).
+{{- if .Values.tests.enabled }}
+    # helm-test pod hits /status.php on the Service. Narrow rule on 8080 only.
     - from:
-        - podSelector: {}
+        - podSelector:
+            matchLabels:
+              {{- include "nextcloud-stack.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: test
+      ports:
+        - port: {{ .Values.nextcloud.service.targetPort }}
+          protocol: TCP
+{{- end }}
   egress:
     # DNS
     - to:
@@ -229,6 +238,43 @@ spec:
         - port: 443
           protocol: TCP
         - port: 80
+          protocol: TCP
+{{- end }}
+
+---
+# ---- helm-test: egress to DNS + Nextcloud Service only ---------------------
+# Sticky policy (not a hook) so `helm test` can be re-run without races. The
+# test Pod itself is a hook with delete-on-success; this NP stays.
+{{- if .Values.tests.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-test
+  labels:
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: test
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "nextcloud-stack.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: test
+  policyTypes:
+    - Ingress
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "nextcloud-stack.nextcloud.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: {{ .Values.nextcloud.service.targetPort }}
           protocol: TCP
 {{- end }}
 {{- end }}
