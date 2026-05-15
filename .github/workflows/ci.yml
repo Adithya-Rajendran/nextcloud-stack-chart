@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  helm:
+    name: helm lint + template + kubeconform
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.18.0
+
+      # `helm lint` against the chart with example-values supplied. Without
+      # values the requireSecret helpers fail (by design) — example-values
+      # provides dummy existingSecret names that satisfy the requireSecret
+      # gate without leaking real values.
+      - name: helm lint
+        run: helm lint . -f example-values.yaml
+
+      - name: helm template
+        run: helm template test . -f example-values.yaml > /tmp/rendered.yaml
+
+      # Regression test for the requireSingleValuedRealIpHeader helper added
+      # in commit 4f5a412. Switching realIp.header to a multi-valued header
+      # MUST abort render, otherwise the nginx real_ip pipeline becomes
+      # spoofable.
+      - name: render must fail on multi-valued realIp.header
+        run: |
+          if helm template test . -f example-values.yaml \
+              --set nextcloud.web.realIp.header=X-Forwarded-For > /dev/null 2>&1; then
+            echo "FAIL: render should error on multi-valued realIp.header"
+            exit 1
+          fi
+          if helm template test . -f example-values.yaml \
+              --set nextcloud.web.realIp.header=Forwarded > /dev/null 2>&1; then
+            echo "FAIL: render should error on realIp.header=Forwarded"
+            exit 1
+          fi
+          echo "OK: requireSingleValuedRealIpHeader fires correctly"
+
+      # Regression test for the requireSecret helpers — a chart-render with
+      # no values must fail (existingSecret fields are empty by default).
+      - name: render must fail with no values supplied
+        run: |
+          if helm template test . > /dev/null 2>&1; then
+            echo "FAIL: render should error when existingSecret fields are empty"
+            exit 1
+          fi
+          echo "OK: requireSecret fires correctly"
+
+      - name: Install kubeconform
+        run: |
+          curl -fsSL \
+            https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+            | sudo tar -xz -C /usr/local/bin kubeconform
+          kubeconform -v
+
+      # Schema-validate the rendered manifests against the K8s API. -strict
+      # rejects fields the schema doesn't know. The default schema source is
+      # the upstream openapi-v2 spec mirror.
+      - name: kubeconform
+        run: |
+          kubeconform -strict -summary \
+            -kubernetes-version 1.32.0 \
+            -schema-location default \
+            /tmp/rendered.yaml
