@@ -20,7 +20,10 @@
 # extracting the nginx block reliably is more work than periodic manual diff.
 
 worker_processes auto;
-error_log /var/log/nginx/error.log notice;
+# Log to stdout/stderr so kubectl logs surfaces them and any future log
+# aggregator picks them up without a sidecar tail. emptyDir log volumes
+# disappear on pod restart anyway.
+error_log /dev/stderr notice;
 pid /tmp/nginx.pid;
 
 events {
@@ -39,7 +42,7 @@ http {
     log_format main '$remote_addr - $remote_user [$time_local] "$request" '
                     '$status $body_bytes_sent "$http_referer" '
                     '"$http_user_agent" "$http_x_forwarded_for"';
-    access_log /var/log/nginx/access.log main;
+    access_log /dev/stdout main;
 
     server_tokens off;
     sendfile on;
@@ -95,12 +98,12 @@ http {
         gzip_types application/atom+xml text/javascript application/javascript application/json application/ld+json application/manifest+json application/rss+xml application/vnd.geo+json application/vnd.ms-fontobject application/wasm application/x-font-ttf application/x-web-app-manifest+json application/xhtml+xml application/xml font/opentype image/bmp image/svg+xml image/x-icon text/cache-manifest text/css text/plain text/vcard text/vnd.rim.location.xloc text/vtt text/x-component text/x-cross-domain-policy;
 
         # Security headers borrowed from upstream Nextcloud .htaccess.
+        # X-XSS-Protection is omitted — deprecated in modern browsers.
         add_header Referrer-Policy                   "no-referrer"       always;
         add_header X-Content-Type-Options            "nosniff"           always;
         add_header X-Frame-Options                   "SAMEORIGIN"        always;
         add_header X-Permitted-Cross-Domain-Policies "none"              always;
         add_header X-Robots-Tag                      "noindex, nofollow" always;
-        add_header X-XSS-Protection                  "1; mode=block"     always;
 
         fastcgi_hide_header X-Powered-By;
 

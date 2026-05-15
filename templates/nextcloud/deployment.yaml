@@ -191,8 +191,6 @@ spec:
               mountPath: /tmp
             - name: nginx-cache
               mountPath: /var/cache/nginx
-            - name: nginx-log
-              mountPath: /var/log/nginx
           startupProbe:
             # /status.php is the most reliable readiness signal (returns
             # installed:true once setup finished).
@@ -245,5 +243,3 @@ spec:
           emptyDir: { sizeLimit: 64Mi }
         - name: nginx-cache
           emptyDir: { sizeLimit: 256Mi }
-        - name: nginx-log
-          emptyDir: { sizeLimit: 64Mi }
