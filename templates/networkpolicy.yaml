@@ -75,7 +75,12 @@ spec:
   egress:
     # DNS
     - to:
-        - namespaceSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
       ports:
         - port: 53
           protocol: UDP
@@ -111,14 +116,16 @@ spec:
     {{- end }}
     {{- if .Values.networkPolicy.allowAllEgress }}
     # Public internet (app updates, federation, etc.). Lock down by setting
-    # networkPolicy.allowAllEgress: false.
+    # networkPolicy.allowAllEgress: false. The `except` block keeps in-cluster
+    # traffic on the explicit per-Service rules above — see
+    # networkPolicy.inClusterCidrs.
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
             except:
-              # Block in-cluster pod CIDR — egress to in-cluster IPs must go
-              # through the explicit per-service rules above.
-              - {{ .Values.nextcloud.web.realIp.trustedCidr }}
+              {{- range .Values.networkPolicy.inClusterCidrs }}
+              - {{ . }}
+              {{- end }}
       ports:
         - port: 443
           protocol: TCP
@@ -151,15 +158,9 @@ spec:
       ports:
         - port: {{ .Values.postgres.service.port }}
           protocol: TCP
-  egress:
-    # DNS for self.
-    - to:
-        - namespaceSelector: {}
-      ports:
-        - port: 53
-          protocol: UDP
-        - port: 53
-          protocol: TCP
+  # No egress rules — single-replica postgres doesn't initiate connections.
+  # `Egress` is kept in policyTypes so absence-of-rules means deny-all even
+  # if the default-deny policy is ever removed.
 {{- end }}
 
 ---
@@ -186,14 +187,7 @@ spec:
       ports:
         - port: {{ .Values.valkey.service.port }}
           protocol: TCP
-  egress:
-    - to:
-        - namespaceSelector: {}
-      ports:
-        - port: 53
-          protocol: UDP
-        - port: 53
-          protocol: TCP
+  # No egress rules — Valkey is daemon-only. See postgres policy comment.
 {{- end }}
 
 ---
@@ -222,7 +216,12 @@ spec:
           protocol: TCP
   egress:
     - to:
-        - namespaceSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
       ports:
         - port: 53
           protocol: UDP
@@ -233,7 +232,9 @@ spec:
         - ipBlock:
             cidr: 0.0.0.0/0
             except:
-              - {{ .Values.nextcloud.web.realIp.trustedCidr }}
+              {{- range .Values.networkPolicy.inClusterCidrs }}
+              - {{ . }}
+              {{- end }}
       ports:
         - port: 443
           protocol: TCP
@@ -263,7 +264,12 @@ spec:
     - Egress
   egress:
     - to:
-        - namespaceSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
       ports:
         - port: 53
           protocol: UDP

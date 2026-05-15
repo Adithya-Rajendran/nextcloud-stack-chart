@@ -363,6 +363,16 @@ networkPolicy:
     podLabel:
       key: app
       value: cloudflared
+  # CIDRs treated as "in-cluster" by the public-egress `except` block. Egress
+  # to anything inside these CIDRs must go through the explicit per-Service
+  # rules above, NOT the 0.0.0.0/0 fallback. List BOTH the pod CIDR AND your
+  # cluster's Service CIDR — egress to a ClusterIP VIP on 80/443 (e.g. the
+  # kube-apiserver) would otherwise escape through the public-egress rule.
+  # On Canonical K8s the Service CIDR is typically 10.152.183.0/24; upstream
+  # K8s default is 10.96.0.0/12. Find yours via:
+  #   kubectl cluster-info dump | grep -m1 service-cluster-ip-range
+  inClusterCidrs:
+    - 10.1.0.0/16
   # Allow egress to the public internet for app updates, federation, etc.
   # Set to false to lock down further (Nextcloud may surface errors).
   allowAllEgress: true
