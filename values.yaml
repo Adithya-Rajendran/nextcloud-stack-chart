@@ -20,9 +20,6 @@ fullnameOverride: ""
 # Common labels added to every resource.
 commonLabels: {}
 
-# Common annotations added to every resource.
-commonAnnotations: {}
-
 # Image-pull secrets (DHI images may need one; cf-tunnel separately).
 imagePullSecrets: []
 # - name: dhi-pull
@@ -126,17 +123,18 @@ nextcloud:
     targetPort: 8080
     annotations: {}
 
-  # Persistence — RWO Cinder.
+  # Persistence — RWO Cinder. `accessModes` is a list for K8s API shape but
+  # only `ReadWriteOnce` is ever valid here: the Nextcloud pod shares the
+  # PVC between fpm (RW) and nginx (RO), but they're in the same pod. RWX is
+  # not supported by Cinder and would Multi-Attach on a rolling restart.
   persistence:
     webroot:
-      enabled: true
       size: 10Gi
       storageClassName: csi-cinder-sc-retain
       accessModes: ["ReadWriteOnce"]
       # Existing PVC name to mount instead of creating new (Phase 2 migration).
       existingClaim: ""
     data:
-      enabled: true
       size: 100Gi
       storageClassName: csi-cinder-sc-retain
       accessModes: ["ReadWriteOnce"]
@@ -308,10 +306,7 @@ valkey:
     enabled: true
     existingSecret: ""    # REQUIRED when enabled — name of pre-created K8s Secret
 
-  # No persistence: cache only. csi-cinder-sc-delete would normally apply but
-  # we don't even need a PVC. Use emptyDir.
-  persistence:
-    enabled: false
+  # No persistence: cache only. Valkey unconditionally uses emptyDir.
 
   # DHI valkey is 'nonroot' UID 65532.
   podSecurityContext:

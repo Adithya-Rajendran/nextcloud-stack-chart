@@ -2,7 +2,7 @@
 {{/*
 DB-migration Job. Runs the 4 idempotent `occ db:add-missing-*` commands.
 
-Helm hook: post-install,post-upgrade (weight 10 — after schema-fix at -5).
+Helm hook: post-install,post-upgrade.
 
 Why post-upgrade (not pre-upgrade):
   - Pre-upgrade fires BEFORE Helm rolls the new image. Migrations would run
