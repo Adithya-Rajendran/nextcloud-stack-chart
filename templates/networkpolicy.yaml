@@ -32,7 +32,7 @@ spec:
     - Egress
 
 ---
-# ---- Nextcloud: ingress from cf-tunnel, egress to deps + DNS + internet -----
+# ---- Nextcloud: ingress from configured sources, egress to deps + DNS + net --
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -47,20 +47,40 @@ spec:
     - Ingress
     - Egress
   ingress:
-    # Only cloudflared pods in the cf-tunnel namespace. `kubectl exec` from the
-    # cron/migrate Jobs does NOT need an ingress rule here — exec traffic goes
-    # apiserver -> kubelet -> pod, not through the Service, and is not
-    # constrained by NetworkPolicy on the pod-to-pod path.
+    # Sources allowed to reach Nextcloud on the HTTP port. Populate
+    # networkPolicy.nextcloudIngressFrom with your ingress controller / gateway
+    # (raw NetworkPolicyPeer entries); the Cloudflare addon adds its own source
+    # automatically. `kubectl exec` from the cron/migrate Jobs does NOT need a
+    # rule here — exec traffic goes apiserver -> kubelet -> pod, not through the
+    # Service, and is not constrained by NetworkPolicy on the pod-to-pod path.
+{{- range .Values.networkPolicy.nextcloudIngressFrom }}
     - from:
+        {{- toYaml (list .) | nindent 8 }}
+      ports:
+        - port: {{ $.Values.nextcloud.service.targetPort }}
+          protocol: TCP
+{{- end }}
+{{- if .Values.cloudflare.enabled }}
+    # Cloudflare addon: allow the cloudflared pods.
+    - from:
+  {{- if .Values.cloudflare.tunnel.enabled }}
+        # cloudflared deployed by this chart (same namespace).
+        - podSelector:
+            matchLabels:
+              {{- include "nextcloud-stack.cloudflared.selectorLabels" . | nindent 14 }}
+  {{- else }}
+        # cloudflared run externally.
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: {{ .Values.networkPolicy.cfTunnel.namespace }}
+              kubernetes.io/metadata.name: {{ .Values.cloudflare.externalTunnel.namespace }}
           podSelector:
             matchLabels:
-              {{ .Values.networkPolicy.cfTunnel.podLabel.key }}: {{ .Values.networkPolicy.cfTunnel.podLabel.value }}
+              {{ .Values.cloudflare.externalTunnel.podLabel.key }}: {{ .Values.cloudflare.externalTunnel.podLabel.value }}
+  {{- end }}
       ports:
         - port: {{ .Values.nextcloud.service.targetPort }}
           protocol: TCP
+{{- end }}
 {{- if .Values.tests.enabled }}
     # helm-test pod hits /status.php on the Service. Narrow rule on 8080 only.
     - from:
@@ -240,6 +260,56 @@ spec:
           protocol: TCP
         - port: 80
           protocol: TCP
+{{- end }}
+
+---
+# ---- cloudflared: no ingress, egress to DNS + Nextcloud + Cloudflare edge ---
+{{- if and .Values.cloudflare.enabled .Values.cloudflare.tunnel.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "nextcloud-stack.cloudflared.fullname" . }}
+  labels:
+    {{- include "nextcloud-stack.cloudflared.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "nextcloud-stack.cloudflared.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  # No ingress — cloudflared dials out to the Cloudflare edge.
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { port: 53, protocol: UDP }
+        - { port: 53, protocol: TCP }
+    # The Nextcloud Service (origin).
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "nextcloud-stack.nextcloud.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: {{ .Values.nextcloud.service.targetPort }}
+          protocol: TCP
+    # The Cloudflare edge (HTTPS + QUIC on 7844).
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              {{- range .Values.networkPolicy.inClusterCidrs }}
+              - {{ . }}
+              {{- end }}
+      ports:
+        - { port: 443,  protocol: TCP }
+        - { port: 7844, protocol: TCP }
+        - { port: 7844, protocol: UDP }
 {{- end }}
 
 ---

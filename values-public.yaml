@@ -1,0 +1,82 @@
+# Public-images overlay.
+#
+# The chart defaults to Docker Hardened Images (dhi.io), which need a paid Docker
+# subscription + an imagePullSecret. This overlay swaps every image for a public
+# Docker Hub equivalent so anyone can install the chart with no subscription.
+#
+# Apply on TOP of your normal values:
+#   helm install nextcloud-stack . -n <ns> \
+#       -f example-values.yaml -f values-public.yaml
+#
+# UIDs differ from the DHI images, so the securityContexts are adjusted to match.
+
+# No subscription registry ⇒ no pull secret needed.
+imagePullSecrets: []
+
+nextcloud:
+  web:
+    image:
+      registry: docker.io
+      repository: nginxinc/nginx-unprivileged
+      tag: 1.27-alpine
+      digest: ""
+  # nginxinc/nginx-unprivileged listens on 8080 and runs as UID 101.
+  containerSecurityContext:
+    web:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      runAsNonRoot: true
+      runAsUser: 101
+      runAsGroup: 101
+      capabilities:
+        drop: ["ALL"]
+  kubectl:
+    image:
+      registry: docker.io
+      repository: rancher/kubectl
+      tag: v1.31.4
+      digest: ""
+
+postgres:
+  image:
+    registry: docker.io
+    repository: library/postgres
+    tag: 17-alpine
+    digest: ""
+  # postgres:17-alpine runs as UID 70 (same as the DHI image) — no change needed.
+
+valkey:
+  image:
+    registry: docker.io
+    repository: valkey/valkey
+    tag: 8-alpine
+    digest: ""
+  # The public valkey image runs as UID 999.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 999
+    runAsGroup: 999
+    fsGroup: 999
+    seccompProfile:
+      type: RuntimeDefault
+
+# The public clamav/clamav image runs the daemon as UID 100 via its unprivileged
+# entrypoint, but non-root behavior varies by build — disabled here by default.
+# To enable it, validate on your cluster first, then flip enabled and set the UID:
+#   clamav:
+#     enabled: true
+#     podSecurityContext: { runAsUser: 100, runAsGroup: 100, fsGroup: 100, runAsNonRoot: true }
+clamav:
+  enabled: false
+  image:
+    registry: docker.io
+    repository: clamav/clamav
+    tag: "1.4"
+    digest: ""
+
+tests:
+  image:
+    registry: docker.io
+    repository: curlimages/curl
+    tag: 8.11.1
+    digest: ""

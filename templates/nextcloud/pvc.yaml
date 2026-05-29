@@ -2,8 +2,8 @@
 PVCs for the Nextcloud webroot and data directory. Both RWO Cinder, retain SC.
 
 If `existingClaim` is set on either, no PVC is rendered — the Deployment uses
-the named existing PVC. This is the migration handle for Phase 2 of the cutover
-plan: reattach the existing aio-namespace PVCs to the new chart's Pod.
+the named existing PVC. This is the migration handle: reattach PVCs from a prior
+install to the new chart's Pod.
 
 `helm.sh/resource-policy: keep` keeps the PVCs after `helm uninstall` so a
 fresh re-install can reattach the data. To actually delete, run

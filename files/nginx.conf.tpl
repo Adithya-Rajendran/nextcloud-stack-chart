@@ -58,17 +58,22 @@ http {
     uwsgi_temp_path       /tmp/uwsgi_temp;
     scgi_temp_path        /tmp/scgi_temp;
 
-    # Real client IP from Cloudflare's CF-Connecting-IP header, gated by the
-    # pod CIDR (only requests from cloudflared pods are trusted to set it).
-    # real_ip_recursive is OFF: this only makes sense for single-valued
-    # headers like CF-Connecting-IP. With X-Forwarded-For-style multi-value
-    # chains, recursive=on lets a client append a trusted-looking address as
-    # the rightmost link and bypass set_real_ip_from. The chart fails render
-    # if `realIp.header` is set to a multi-valued header — see
-    # nextcloud-stack.requireSingleValuedRealIpHeader in _helpers.tpl.
-    set_real_ip_from {{ .Values.nextcloud.web.realIp.trustedCidr }};
-    real_ip_header   {{ .Values.nextcloud.web.realIp.header }};
-    real_ip_recursive off;
+    # Real client IP, gated by the trusted-proxy CIDRs (only requests arriving
+    # from those sources are allowed to set the forwarded header). Header +
+    # recursive flag are resolved by the chart (generic X-Forwarded-For with
+    # recursive on, or Cloudflare's single-valued CF-Connecting-IP with recursive
+    # off when the cloudflare addon is enabled). The chart fails render on an
+    # unsafe pairing — see nextcloud-stack.requireSafeRealIp in _helpers.tpl.
+    # With no trusted CIDRs configured the whole block is omitted, so the header
+    # is never honored and cannot be spoofed.
+{{- $realIpCidrs := ternary .Values.cloudflare.realIp.trustedCidrs .Values.nextcloud.web.realIp.trustedCidrs .Values.cloudflare.enabled }}
+{{- if $realIpCidrs }}
+{{- range $realIpCidrs }}
+    set_real_ip_from {{ . }};
+{{- end }}
+    real_ip_header   {{ include "nextcloud-stack.realIp.header" $ }};
+    real_ip_recursive {{ include "nextcloud-stack.realIp.recursive" $ }};
+{{- end }}
 
     map $arg_v $asset_immutable {
         "" "";
@@ -142,9 +147,12 @@ http {
             include fastcgi_params;
             fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
             fastcgi_param PATH_INFO $path_info;
-            # cloudflared terminates TLS — Nextcloud must see HTTPS=on so it
-            # sets the Secure flag on cookies and emits correct URLs.
+{{- if .Values.nextcloud.web.httpsBehindProxy }}
+            # TLS is terminated upstream (ingress / gateway / cloudflared), so
+            # Nextcloud must see HTTPS=on to set the Secure cookie flag and emit
+            # https:// URLs. Disable via nextcloud.web.httpsBehindProxy=false.
             fastcgi_param HTTPS on;
+{{- end }}
             fastcgi_param modHeadersAvailable true;
             fastcgi_param front_controller_active true;
             fastcgi_pass php-handler;

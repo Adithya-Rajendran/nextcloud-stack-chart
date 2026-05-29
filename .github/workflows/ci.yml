@@ -28,23 +28,27 @@ jobs:
       - name: helm template
         run: helm template test . -f example-values.yaml > /tmp/rendered.yaml
 
-      # Regression test for the requireSingleValuedRealIpHeader helper added
-      # in commit 4f5a412. Switching realIp.header to a multi-valued header
-      # MUST abort render, otherwise the nginx real_ip pipeline becomes
-      # spoofable.
-      - name: render must fail on multi-valued realIp.header
+      # Regression test for requireSafeRealIp. A multi-valued header
+      # (X-Forwarded-For / Forwarded) with real_ip_recursive OFF and a non-empty
+      # trustedCidrs MUST abort render — otherwise the nginx real_ip pipeline is
+      # spoofable. The safe default (X-Forwarded-For + recursive on) MUST render.
+      - name: realIp safety guard
         run: |
+          # Unsafe: multi-valued header + recursive off (example-values sets trustedCidrs).
           if helm template test . -f example-values.yaml \
-              --set nextcloud.web.realIp.header=X-Forwarded-For > /dev/null 2>&1; then
-            echo "FAIL: render should error on multi-valued realIp.header"
+              --set nextcloud.web.realIp.recursive=false > /dev/null 2>&1; then
+            echo "FAIL: render should error on X-Forwarded-For with recursive off"
             exit 1
           fi
           if helm template test . -f example-values.yaml \
-              --set nextcloud.web.realIp.header=Forwarded > /dev/null 2>&1; then
-            echo "FAIL: render should error on realIp.header=Forwarded"
+              --set nextcloud.web.realIp.header=Forwarded \
+              --set nextcloud.web.realIp.recursive=false > /dev/null 2>&1; then
+            echo "FAIL: render should error on Forwarded with recursive off"
             exit 1
           fi
-          echo "OK: requireSingleValuedRealIpHeader fires correctly"
+          # Safe: the default X-Forwarded-For + recursive on must render.
+          helm template test . -f example-values.yaml > /dev/null
+          echo "OK: requireSafeRealIp fires correctly"
 
       # Regression test for the requireSecret helpers — a chart-render with
       # no values must fail (existingSecret fields are empty by default).
@@ -56,6 +60,41 @@ jobs:
           fi
           echo "OK: requireSecret fires correctly"
 
+      # Render the exposure methods + Cloudflare addon + DHI overlay, and assert
+      # their required-value guards fire. Outputs feed kubeconform below.
+      - name: render exposure + addon variants
+        run: |
+          set -e
+          # Gateway API HTTPRoute.
+          helm template test . -f example-values.yaml \
+            --set ingress.enabled=false \
+            --set gatewayApi.enabled=true \
+            --set gatewayApi.parentRef.name=gw > /tmp/gw.yaml
+          grep -q 'kind: HTTPRoute' /tmp/gw.yaml
+          if helm template test . -f example-values.yaml \
+              --set ingress.enabled=false --set gatewayApi.enabled=true > /dev/null 2>&1; then
+            echo "FAIL: gatewayApi without parentRef.name should error"; exit 1
+          fi
+          # Cloudflare addon (deploys cloudflared, switches to CF-Connecting-IP).
+          helm template test . -f example-values.yaml \
+            --set ingress.enabled=false \
+            --set cloudflare.enabled=true \
+            --set cloudflare.tunnel.existingSecret=cf \
+            --set 'cloudflare.realIp.trustedCidrs={10.0.0.0/8}' > /tmp/cf.yaml
+          grep -q 'app.kubernetes.io/component: cloudflared' /tmp/cf.yaml
+          grep -q 'real_ip_header   CF-Connecting-IP' /tmp/cf.yaml
+          if helm template test . -f example-values.yaml \
+              --set cloudflare.enabled=true > /dev/null 2>&1; then
+            echo "FAIL: cloudflare tunnel without existingSecret should error"; exit 1
+          fi
+          # Public-images overlay (default images are DHI; this swaps to Docker Hub).
+          helm template test . -f example-values.yaml -f values-public.yaml > /tmp/public.yaml
+          grep -q 'nginxinc/nginx-unprivileged' /tmp/public.yaml
+          if grep -q 'dhi.io' /tmp/public.yaml; then
+            echo "FAIL: values-public.yaml should leave no dhi.io references"; exit 1
+          fi
+          echo "OK: exposure + addon variants render"
+
       - name: Install kubeconform
         run: |
           curl -fsSL \
@@ -64,11 +103,14 @@ jobs:
           kubeconform -v
 
       # Schema-validate the rendered manifests against the K8s API. -strict
-      # rejects fields the schema doesn't know. The default schema source is
-      # the upstream openapi-v2 spec mirror.
+      # rejects fields the schema doesn't know. -ignore-missing-schemas skips
+      # CRDs with no built-in schema (the Gateway API HTTPRoute).
       - name: kubeconform
         run: |
-          kubeconform -strict -summary \
-            -kubernetes-version 1.32.0 \
-            -schema-location default \
-            /tmp/rendered.yaml
+          for f in /tmp/rendered.yaml /tmp/gw.yaml /tmp/cf.yaml /tmp/public.yaml; do
+            echo "== $f =="
+            kubeconform -strict -ignore-missing-schemas -summary \
+              -kubernetes-version 1.32.0 \
+              -schema-location default \
+              "$f"
+          done

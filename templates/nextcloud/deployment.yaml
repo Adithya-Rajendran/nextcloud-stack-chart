@@ -55,8 +55,7 @@ spec:
       # Init: wait for Postgres + Valkey before fpm starts.
       initContainers:
         - name: wait-for-postgres
-          # Use the postgres image — has pg_isready AND a shell (for the loop).
-          # nginx:1-compat is busybox sh, which doesn't support bash's /dev/tcp.
+          # Use the postgres image — it has pg_isready AND a shell for the loop.
           image: {{ include "nextcloud-stack.image" .Values.postgres.image }}
           imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
           command:
@@ -79,7 +78,7 @@ spec:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             runAsNonRoot: true
-            runAsUser: 70       # dhi.io/postgres UID
+            runAsUser: 70       # postgres image UID
             runAsGroup: 70
             capabilities:
               drop: ["ALL"]

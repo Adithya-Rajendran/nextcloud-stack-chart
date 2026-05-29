@@ -15,7 +15,9 @@
 #              (`go install github.com/google/go-containerregistry/cmd/crane@latest`)
 #   - yq       https://github.com/mikefarah/yq
 #
-# For private/auth'd registries (dhi.io): `crane auth login dhi.io` first.
+# The default images include dhi.io (a private, subscription registry): run
+# `crane auth login dhi.io` first. Public-overlay users: render a merged values
+# file (helm template ... --show-only is not enough) and point this script at it.
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -34,6 +36,7 @@ PATHS=(
   .postgres.image
   .valkey.image
   .clamav.image
+  .cloudflare.tunnel.image
   .tests.image
 )
 

@@ -2,12 +2,11 @@
 {{/*
 helm test target. Hits /status.php on the in-cluster Service.
 
-dhi.io/curl:8-alpine3.23 is shell-less — there's no /bin/sh, no echo, no grep.
-We can't run the previous `sh -c | curl ... | grep installed:true` pipeline.
-Instead: rely on curl's HTTP-status-based --fail. /status.php returns 200 once
-Nextcloud's entrypoint completes installation; the Service's own readinessProbe
-already validates 'installed:true' on the same endpoint, so reaching this point
-means the Pod is installed. The helm test only proves DNS + Service routing.
+Uses curl's HTTP-status-based --fail rather than a shell pipeline: /status.php
+returns 200 once Nextcloud's entrypoint completes installation; the Service's own
+readinessProbe already validates 'installed:true' on the same endpoint, so
+reaching this point means the Pod is installed. The helm test proves DNS +
+Service routing end to end.
 */}}
 apiVersion: v1
 kind: Pod
@@ -38,7 +37,7 @@ spec:
         readOnlyRootFilesystem: true
         capabilities:
           drop: ["ALL"]
-      # dhi.io/curl alpine entrypoint is `curl`. Pass args directly.
+      # The curl image entrypoint is `curl`. Pass args directly.
       args:
         - --silent
         - --show-error

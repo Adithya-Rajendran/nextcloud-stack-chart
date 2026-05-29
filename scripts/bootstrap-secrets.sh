@@ -9,24 +9,26 @@
 #
 # Usage:
 #   bootstrap-secrets.sh [--namespace NS] [--release RELEASE] [--force]
-#                        [--kubeconfig PATH]
+#                        [--kubeconfig PATH] [--cloudflare-token TOKEN]
 #
 # Defaults:
-#   --namespace aio-test
+#   --namespace nextcloud
 #   --release   nextcloud-stack
 #
 # Secrets created (names follow the chart's `existingSecret` convention):
-#   <release>-admin     keys: admin-user, admin-password
-#   <release>-postgres  keys: nextcloud-db-password
-#   <release>-valkey    keys: valkey-password, valkey.conf
+#   <release>-admin       keys: admin-user, admin-password
+#   <release>-postgres    keys: nextcloud-db-password
+#   <release>-valkey      keys: valkey-password, valkey.conf
+#   <release>-cloudflared key:  tunnel-token   (only with --cloudflare-token)
 #
 # Admin password is printed once at the end — save it in your password manager.
 
 set -euo pipefail
 
-NAMESPACE="aio-test"
+NAMESPACE="nextcloud"
 RELEASE="nextcloud-stack"
 FORCE=0
+CF_TOKEN=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 while [[ $# -gt 0 ]]; do
@@ -34,6 +36,7 @@ while [[ $# -gt 0 ]]; do
     -n|--namespace) NAMESPACE="$2"; shift 2 ;;
     -r|--release)   RELEASE="$2"; shift 2 ;;
     --force)        FORCE=1; shift ;;
+    --cloudflare-token) CF_TOKEN="$2"; shift 2 ;;
     --kubeconfig)   export KUBECONFIG="$2"; shift 2 ;;
     -h|--help)
       sed -n '1,/^set -euo/p' "$0" | sed '$d'
@@ -128,6 +131,13 @@ create_or_skip "${RELEASE}-postgres" \
 create_or_skip "${RELEASE}-valkey" \
   --from-file=valkey-password="$TMP/valkey-password" \
   --from-file=valkey.conf="$TMP/valkey.conf"
+
+# Cloudflare tunnel token (optional) — consumed by cloudflare.tunnel.existingSecret.
+if [[ -n "$CF_TOKEN" ]]; then
+  printf "%s" "$CF_TOKEN" > "$TMP/tunnel-token"
+  create_or_skip "${RELEASE}-cloudflared" \
+    --from-file=tunnel-token="$TMP/tunnel-token"
+fi
 
 cat <<EOF
 

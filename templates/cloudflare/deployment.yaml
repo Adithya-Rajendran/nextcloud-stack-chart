@@ -1,0 +1,90 @@
+{{- if and .Values.cloudflare.enabled .Values.cloudflare.tunnel.enabled }}
+{{/*
+cloudflared tunnel Deployment (token-based). Pre-create the token Secret:
+
+  kubectl -n <ns> create secret generic <release>-cloudflared \
+    --from-literal=tunnel-token='<TOKEN-FROM-DASHBOARD>'
+  # or: scripts/bootstrap-secrets.sh --cloudflare-token '<TOKEN>'
+
+Then, in the Cloudflare dashboard, point the tunnel's Public Hostname at the
+Nextcloud Service: http://<nextcloud-svc>.<ns>.svc.cluster.local:<port>.
+
+Runs as nonroot with a read-only rootfs; HOME=/tmp gives cloudflared a writable
+scratch dir. /ready (on the metrics port) is the readiness/liveness signal.
+*/}}
+{{- if not .Values.cloudflare.tunnel.existingSecret }}
+{{- fail "cloudflare.tunnel.enabled is true but cloudflare.tunnel.existingSecret is empty. Pre-create a Secret with key `tunnel-token` (scripts/bootstrap-secrets.sh --cloudflare-token '<TOKEN>') and set cloudflare.tunnel.existingSecret to its name." }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nextcloud-stack.cloudflared.fullname" . }}
+  labels:
+    {{- include "nextcloud-stack.cloudflared.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.cloudflare.tunnel.replicas }}
+  selector:
+    matchLabels:
+      {{- include "nextcloud-stack.cloudflared.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "nextcloud-stack.cloudflared.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- include "nextcloud-stack.imagePullSecrets" . | nindent 6 }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.cloudflare.tunnel.podSecurityContext | nindent 8 }}
+      containers:
+        - name: cloudflared
+          image: {{ include "nextcloud-stack.image" .Values.cloudflare.tunnel.image }}
+          imagePullPolicy: {{ .Values.cloudflare.tunnel.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.cloudflare.tunnel.containerSecurityContext | nindent 12 }}
+          args:
+            - tunnel
+            - --no-autoupdate
+            {{- range .Values.cloudflare.tunnel.extraArgs }}
+            - {{ . | quote }}
+            {{- end }}
+            - run
+          env:
+            - name: TUNNEL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.cloudflare.tunnel.existingSecret }}
+                  key: tunnel-token
+            # Expose the metrics/readiness server on a known port.
+            - name: TUNNEL_METRICS
+              value: "0.0.0.0:2000"
+            - name: HOME
+              value: /tmp
+          ports:
+            - name: metrics
+              containerPort: 2000
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /ready
+              port: metrics
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.cloudflare.tunnel.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: { sizeLimit: 64Mi }
+{{- end }}

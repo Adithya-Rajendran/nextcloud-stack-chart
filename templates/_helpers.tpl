@@ -3,7 +3,7 @@ Common template helpers.
 
 Naming convention: every resource uses one of these helpers so the chart can be
 installed under multiple release names without collision. Resource names are
-short and unprefixed (no "aio" carryover from the previous chart).
+short and release-qualified, with no hardcoded prefix.
 */}}
 
 {{/*
@@ -126,6 +126,25 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 {{- end -}}
 
+{{- define "nextcloud-stack.cloudflared.fullname" -}}{{ include "nextcloud-stack.fullname" . }}-cloudflared{{- end -}}
+
+{{- define "nextcloud-stack.cloudflared.selectorLabels" -}}
+{{ include "nextcloud-stack.selectorLabels" . }}
+app.kubernetes.io/component: cloudflared
+{{- end -}}
+
+{{- define "nextcloud-stack.cloudflared.labels" -}}
+helm.sh/chart: {{ include "nextcloud-stack.chart" . }}
+{{ include "nextcloud-stack.cloudflared.selectorLabels" . }}
+{{- if .Chart.AppVersion }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- with .Values.commonLabels }}
+{{ toYaml . }}
+{{- end }}
+{{- end -}}
+
 {{/*
 Image reference. Prefers digest pinning when .digest is set; otherwise tag.
 Digest pinning protects against tag mutation (key for supply-chain integrity
@@ -197,22 +216,49 @@ Args (dict):
 {{- end -}}
 
 {{/*
-Validate that nextcloud.web.realIp.header is a single-valued header.
+Real-client-IP resolution.
 
-The nginx config has real_ip_recursive OFF — a deliberate hardening. With
-multi-valued headers (X-Forwarded-For, Forwarded) AND recursive ON, a client
-can bypass set_real_ip_from by appending a trusted-looking address as the
-rightmost link. With recursive OFF, multi-valued headers will only see the
-leftmost / rightmost element (depending on nginx parser quirks) and the
-single-source NetworkPolicy gate becomes meaningless.
+The chart supports two proxy modes, resolved here so nginx.conf, config.php, and
+NOTES all agree:
+  * Generic (default): a reverse proxy / ingress controller / gateway sets a
+    forwarded header. Defaults to the multi-valued X-Forwarded-For with
+    real_ip_recursive ON (walk the chain right-to-left skipping trusted proxies).
+  * Cloudflare (cloudflare.enabled): the single-valued CF-Connecting-IP with
+    real_ip_recursive OFF. cloudflare.realIp.* overrides nextcloud.web.realIp.*.
 
-If you genuinely need multi-valued header support, switch behind a proxy
-that emits a single-valued header (Cloudflare's CF-Connecting-IP is the
-canonical example).
+set_real_ip_from is gated to the trusted CIDRs; an empty CIDR list disables the
+rewrite entirely (Nextcloud sees the proxy IP — never spoofable). Consumers pick
+the effective CIDR list with:
+  ternary .Values.cloudflare.realIp.trustedCidrs .Values.nextcloud.web.realIp.trustedCidrs .Values.cloudflare.enabled
 */}}
-{{- define "nextcloud-stack.requireSingleValuedRealIpHeader" -}}
-{{- $h := .Values.nextcloud.web.realIp.header -}}
-{{- if or (eq $h "X-Forwarded-For") (eq $h "Forwarded") -}}
-{{- fail (printf "nextcloud.web.realIp.header is %q. The chart's nginx config sets real_ip_recursive off and cannot safely consume multi-valued forwarded-for chains. Use a single-valued header (e.g. CF-Connecting-IP) emitted by a trusted proxy gated via NetworkPolicy." $h) -}}
+{{- define "nextcloud-stack.realIp.header" -}}
+{{- if .Values.cloudflare.enabled -}}{{ .Values.cloudflare.realIp.header }}{{- else -}}{{ .Values.nextcloud.web.realIp.header }}{{- end -}}
+{{- end -}}
+
+{{/* nginx real_ip_recursive value: on/off. Cloudflare mode is always off. */}}
+{{- define "nextcloud-stack.realIp.recursive" -}}
+{{- if .Values.cloudflare.enabled -}}off{{- else if .Values.nextcloud.web.realIp.recursive -}}on{{- else -}}off{{- end -}}
+{{- end -}}
+
+{{/* Nextcloud forwarded_for_headers entry derived from the effective header,
+e.g. X-Forwarded-For -> HTTP_X_FORWARDED_FOR, CF-Connecting-IP -> HTTP_CF_CONNECTING_IP. */}}
+{{- define "nextcloud-stack.realIp.phpHeader" -}}
+{{- printf "HTTP_%s" (include "nextcloud-stack.realIp.header" . | upper | replace "-" "_") -}}
+{{- end -}}
+
+{{/*
+Validate the effective real-IP config is not spoofable: a multi-valued header
+(X-Forwarded-For / Forwarded) MUST be paired with recursive on. A single-valued
+header (CF-Connecting-IP) is safe either way. Only enforced when real-IP
+rewriting is actually enabled (trustedCidrs non-empty).
+*/}}
+{{- define "nextcloud-stack.requireSafeRealIp" -}}
+{{- $cidrs := ternary .Values.cloudflare.realIp.trustedCidrs .Values.nextcloud.web.realIp.trustedCidrs .Values.cloudflare.enabled -}}
+{{- if $cidrs -}}
+{{- $h := include "nextcloud-stack.realIp.header" . -}}
+{{- $rec := include "nextcloud-stack.realIp.recursive" . -}}
+{{- if and (or (eq $h "X-Forwarded-For") (eq $h "Forwarded")) (eq $rec "off") -}}
+{{- fail (printf "Real-IP misconfiguration: header %q is multi-valued but real_ip_recursive is off — nginx would read a spoofable address. Set nextcloud.web.realIp.recursive=true, or use a single-valued header such as CF-Connecting-IP (the Cloudflare addon does this automatically)." $h) -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}

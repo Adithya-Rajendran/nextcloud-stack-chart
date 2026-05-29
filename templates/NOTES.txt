@@ -17,6 +17,9 @@ WHAT'S RUNNING
 {{- if .Values.clamav.enabled }}
   Deployment/{{ include "nextcloud-stack.clamav.fullname" . }}      ClamAV antivirus daemon
 {{- end }}
+{{- if and .Values.cloudflare.enabled .Values.cloudflare.tunnel.enabled }}
+  Deployment/{{ include "nextcloud-stack.cloudflared.fullname" . }}   cloudflared tunnel
+{{- end }}
 
 NEXT STEPS
 ----------
@@ -30,9 +33,31 @@ NEXT STEPS
    kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "nextcloud-stack.nextcloud.fullname" . }} 8080:{{ .Values.nextcloud.service.port }}
    curl -s http://127.0.0.1:8080/status.php | grep installed
 
-3. Point the Cloudflare Tunnel Public Hostname at the new Service:
+3. Expose Nextcloud:
+{{- if .Values.ingress.enabled }}
+   Ingress is enabled for host {{ .Values.ingress.host }}:
+     kubectl -n {{ .Release.Namespace }} get ingress {{ include "nextcloud-stack.nextcloud.fullname" . }}
+   Point DNS for {{ .Values.ingress.host }} at your ingress controller's address.
+{{- else if .Values.gatewayApi.enabled }}
+   A Gateway API HTTPRoute is enabled (parent Gateway: {{ .Values.gatewayApi.parentRef.name }}):
+     kubectl -n {{ .Release.Namespace }} get httproute {{ include "nextcloud-stack.nextcloud.fullname" . }}
+   Point DNS for {{ .Values.gatewayApi.hostnames }} at the Gateway's address.
+{{- else if .Values.cloudflare.enabled }}
+   The Cloudflare addon is enabled. In the Cloudflare dashboard, point the
+   tunnel's Public Hostname at the Service:
+     http://{{ include "nextcloud-stack.nextcloud.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.nextcloud.service.port }}
+{{- else }}
+   No exposure method is enabled — the Service is ClusterIP only. Reach it via
+   the port-forward in step 2, or enable one of ingress / gatewayApi / cloudflare
+   in your values and `helm upgrade`.
+{{- end }}
+{{- if and .Values.networkPolicy.enabled (not .Values.cloudflare.enabled) (not .Values.networkPolicy.nextcloudIngressFrom) (or .Values.ingress.enabled .Values.gatewayApi.enabled) }}
 
-   http://{{ include "nextcloud-stack.nextcloud.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.nextcloud.service.port }}
+   ⚠  NetworkPolicy is ON but networkPolicy.nextcloudIngressFrom is empty and the
+      Cloudflare addon is off. The Nextcloud Pod will REJECT traffic from your
+      ingress controller / gateway. Add its namespace/pod selector to
+      networkPolicy.nextcloudIngressFrom and `helm upgrade`.
+{{- end }}
 
 4. First login:
 
@@ -46,24 +71,28 @@ NEXT STEPS
 {{- else }}
    Username: {{ .Values.nextcloud.admin.name }}
    Password: stored in Secret/{{ include "nextcloud-stack.fullname" . }}-admin
-
-   Read it:
-     kubectl -n {{ .Release.Namespace }} get secret {{ include "nextcloud-stack.fullname" . }}-admin \
-       -o jsonpath='{.data.admin-password}' | base64 -d
 {{- end }}
 
    Rotate the password from the web UI immediately. Then enable TOTP/WebAuthn.
 
-5. Verify the real client IP is reaching nginx (not a {{ .Values.nextcloud.web.realIp.trustedCidr }} pod IP):
+{{- $realIpCidrs := ternary .Values.cloudflare.realIp.trustedCidrs .Values.nextcloud.web.realIp.trustedCidrs .Values.cloudflare.enabled }}
+{{- if $realIpCidrs }}
+5. Verify the real client IP reaches nginx (not a proxy pod IP):
 
    kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "nextcloud-stack.nextcloud.fullname" . }} -c web | tail -5
 
-   You should see your CF-Connecting-IP, not the cloudflared pod IP. If
-   logs show the cloudflared pod IP, the chart's
-   `nextcloud.web.realIp.trustedCidr` ({{ .Values.nextcloud.web.realIp.trustedCidr }})
-   does NOT match this cluster's pod CIDR. Verify with:
+   nginx trusts {{ $realIpCidrs }} and reads the {{ include "nextcloud-stack.realIp.header" . }} header.
+   If logs show a proxy pod IP instead of real client IPs, your trusted CIDR
+   doesn't cover the proxy. Find your pod CIDR with:
 
      kubectl get nodes -o jsonpath='{.items[*].spec.podCIDR}'
+{{- else }}
+5. Real client IP rewriting is OFF (nextcloud.web.realIp.trustedCidrs is empty).
+   Nextcloud will see your proxy's IP, not the visitor's. Set trustedCidrs to
+   your proxy's (ingress / gateway / cloudflared) pod CIDR to surface real IPs:
+
+     kubectl get nodes -o jsonpath='{.items[*].spec.podCIDR}'
+{{- end }}
 
 6. Run `helm test` for an automated smoke check:
 
@@ -71,22 +100,12 @@ NEXT STEPS
 
 VERIFY CLUSTER ASSUMPTIONS
 --------------------------
-The chart defaults assume Canonical K8s / Cilium. Two things to confirm
-on a non-default cluster:
-
-- networkPolicy.inClusterCidrs (currently {{ .Values.networkPolicy.inClusterCidrs }}) must
-  cover BOTH the pod CIDR and the Service CIDR. Find both with:
+- networkPolicy.inClusterCidrs (currently {{ .Values.networkPolicy.inClusterCidrs }})
+  must cover BOTH the pod CIDR and the Service CIDR so in-cluster traffic stays
+  on the explicit per-Service rules. The RFC1918 default fits most clusters;
+  narrow it for tighter egress control. Find both with:
     kubectl get nodes -o jsonpath='{.items[*].spec.podCIDR}'
     kubectl cluster-info dump | grep -m1 service-cluster-ip-range
-- nextcloud.web.realIp.trustedCidr (currently {{ .Values.nextcloud.web.realIp.trustedCidr }})
-  should match the pod CIDR where cloudflared runs.
-
-WHAT'S DIFFERENT FROM GROUNDHOG2K
----------------------------------
-- nginx (not Apache) reads the real client IP — no more `mod_remoteip` patch.
-- CronJob ships with `concurrencyPolicy: Forbid` — no manual patch needed.
-- DB migrations run as a post-upgrade Hook Job using `kubectl exec` — no
-  more Multi-Attach failure on RWO Cinder.
-- `helm upgrade` is a single command. There is no re-apply checklist.
+- NetworkPolicies only enforce if your CNI supports them (Cilium, Calico, …).
 
 See README.md for more.
