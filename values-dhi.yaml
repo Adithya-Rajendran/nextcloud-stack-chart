@@ -1,0 +1,86 @@
+# Docker Hardened Images overlay.
+#
+# Restores the maintainer's original image set: Docker Hardened Images (dhi.io),
+# which are minimal, non-root, and CVE-scanned — but behind a PAID Docker
+# subscription, so they need an imagePullSecret and are not pullable by everyone.
+#
+# Apply on TOP of your normal values:
+#   helm install nextcloud-stack . -n <ns> \
+#       -f example-values.yaml -f values-dhi.yaml
+#
+# Pre-create the pull secret first:
+#   kubectl -n <ns> create secret docker-registry dhi-pull \
+#       --docker-server=dhi.io --docker-username=<user> \
+#       --docker-password='<docker-pat>' --docker-email=<email>
+
+imagePullSecrets:
+  - name: dhi-pull
+
+nextcloud:
+  web:
+    image:
+      registry: dhi.io
+      repository: nginx
+      tag: 1-compat
+      digest: ""
+  # dhi.io/nginx runs as the 'nonroot' user (UID 65532).
+  containerSecurityContext:
+    web:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      runAsNonRoot: true
+      runAsUser: 65532
+      runAsGroup: 65532
+      capabilities:
+        drop: ["ALL"]
+  kubectl:
+    image:
+      registry: dhi.io
+      repository: kubectl
+      tag: "1"
+      digest: ""
+
+postgres:
+  image:
+    registry: dhi.io
+    repository: postgres
+    tag: "18"
+    digest: ""
+  # dhi.io/postgres is UID 70 (same as the public Alpine default).
+
+valkey:
+  image:
+    registry: dhi.io
+    repository: valkey
+    tag: "9"
+    digest: ""
+  # dhi.io/valkey is the 'nonroot' user (UID 65532).
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+
+clamav:
+  image:
+    registry: dhi.io
+    repository: clamav
+    tag: 1.5-base
+    digest: ""
+  # dhi.io/clamav is the 'nonroot' user (UID 65532).
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+
+tests:
+  image:
+    registry: dhi.io
+    repository: curl
+    tag: 8-alpine3.23
+    digest: ""

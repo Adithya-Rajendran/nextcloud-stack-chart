@@ -1,21 +1,17 @@
-# nextcloud-stack example values.
+# nextcloud-stack example values — a realistic minimal install behind an
+# ingress-nginx controller with public images.
 #
 # Prerequisite: pre-create the chart's external Secrets:
-#   ./scripts/bootstrap-secrets.sh --namespace aio-test --release nextcloud-stack
+#   ./scripts/bootstrap-secrets.sh --namespace nextcloud --release nextcloud-stack
 #
 # Then install (from the chart root):
-#   helm install nextcloud-stack . -n aio-test --create-namespace \
+#   helm install nextcloud-stack . -n nextcloud --create-namespace \
 #       -f example-values.yaml
 #
-# The chart fails template render if any `existingSecret` is empty.
-
-# Required for the dhi.io/* images (they're behind a subscription registry).
-# Pre-create with:
-#   kubectl -n aio-test create secret docker-registry dhi-pull \
-#       --docker-server=dhi.io --docker-username=<user> \
-#       --docker-password='<docker-pat>' --docker-email=<email>
-imagePullSecrets:
-  - name: dhi-pull
+# The chart fails template render if any required `existingSecret` is empty.
+#
+# To use the maintainer's Docker Hardened Images instead, also pass
+#   -f values-dhi.yaml   (requires an imagePullSecret for dhi.io)
 
 nextcloud:
   admin:
@@ -23,33 +19,31 @@ nextcloud:
     # Created by bootstrap-secrets.sh.
     existingSecret: nextcloud-stack-admin
   settings:
-    overwriteHost: drive.example.net
+    overwriteHost: nextcloud.example.com
     overwriteProtocol: https
     trustedDomains:
       - localhost
-      - drive.example.net
-    trustedProxies:
-      - 10.1.0.0/16
-    forwardedForHeaders:
-      - HTTP_CF_CONNECTING_IP
+      - nextcloud.example.com
     maxFileUploadSize: 16G
     memoryLimit: 512M
-
-  resources:
-    requests:
-      cpu: 250m
-      memory: 512Mi
-    limits:
-      cpu: "2"
-      memory: 4Gi
+  web:
+    # Trust the ingress controller's pod CIDR so access logs and Nextcloud see
+    # the real client IP (X-Forwarded-For, walked recursively). Narrow to your
+    # controller's exact range for tighter trust.
+    realIp:
+      header: X-Forwarded-For
+      recursive: true
+      trustedCidrs:
+        - 10.0.0.0/8
 
   persistence:
     webroot:
       size: 10Gi
-      storageClassName: csi-cinder-sc-retain
+      # Empty ⇒ default StorageClass. Pin one to control reclaim policy.
+      storageClassName: ""
     data:
       size: 100Gi
-      storageClassName: csi-cinder-sc-retain
+      storageClassName: ""
 
 postgres:
   enabled: true
@@ -57,9 +51,6 @@ postgres:
     database: nextcloud
     username: nextcloud
     existingSecret: nextcloud-stack-postgres
-  persistence:
-    size: 10Gi
-    storageClassName: csi-cinder-sc-retain
 
 valkey:
   enabled: true
@@ -67,10 +58,26 @@ valkey:
     enabled: true
     existingSecret: nextcloud-stack-valkey
 
+# Optional on-upload virus scanning (heavy). Off by default.
 clamav:
+  enabled: false
+
+# Expose via a standard Ingress. Swap for gatewayApi or cloudflare instead — see
+# values.yaml for those blocks.
+ingress:
   enabled: true
+  className: nginx
+  host: nextcloud.example.com
+  tls:
+    enabled: true
+    secretName: nextcloud-tls
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "16g"
 
 networkPolicy:
   enabled: true
-  cfTunnel:
-    namespace: cf-tunnel
+  # Allow the ingress-nginx controller's namespace to reach Nextcloud.
+  nextcloudIngressFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx

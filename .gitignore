@@ -4,6 +4,10 @@ values.local.yaml
 *-secrets.yaml
 secrets/
 
+# Env files — never commit
+.env
+.env.*
+
 # Helm packaging artifacts
 charts/
 *.tgz

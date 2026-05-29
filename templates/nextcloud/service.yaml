@@ -1,9 +1,10 @@
 {{/*
-ClusterIP Service that cloudflared targets. Routes :{{ .Values.nextcloud.service.port }}
+Service in front of the Pod's nginx container. Routes :{{ .Values.nextcloud.service.port }}
 on the Service to :{{ .Values.nextcloud.service.targetPort }} on the nginx container.
 
-Service name: matches the chart fullname — update the CF Public Hostname target
-to `http://<svc>.<ns>.svc.cluster.local:80` after install.
+Fronted by an Ingress, a Gateway API HTTPRoute, or the Cloudflare addon — all
+target `http://<svc>.<ns>.svc.cluster.local:{{ .Values.nextcloud.service.port }}`.
+Defaults to ClusterIP; switch nextcloud.service.type to expose it directly.
 */}}
 apiVersion: v1
 kind: Service

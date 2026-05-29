@@ -1,8 +1,12 @@
 # nextcloud-stack — default values.
 #
-# Most users override a small subset in a `-f my-values.yaml` file. See
-# `example-values.yaml` next to this file for a realistic configuration that
-# mirrors the previous `secrets/values.override.yaml`.
+# These defaults are designed to work on ANY conformant Kubernetes cluster with
+# public images and a default StorageClass. Most users override a small subset in
+# a `-f my-values.yaml` file. See `example-values.yaml` for a realistic config.
+#
+# Opt-in overlays shipped with the chart:
+#   -f values-dhi.yaml   Docker Hardened Images (paid subscription) — the
+#                        maintainer's hardened image set. Needs imagePullSecrets.
 #
 # SECURITY MODEL
 # --------------
@@ -20,7 +24,8 @@ fullnameOverride: ""
 # Common labels added to every resource.
 commonLabels: {}
 
-# Image-pull secrets (DHI images may need one; cf-tunnel separately).
+# Image-pull secrets. Not needed for the public default images. Required only
+# for private registries (e.g. the optional DHI overlay, or a private mirror).
 imagePullSecrets: []
 # - name: dhi-pull
 
@@ -28,7 +33,7 @@ imagePullSecrets: []
 # Nextcloud (php-fpm + nginx)
 # -----------------------------------------------------------------------------
 nextcloud:
-  # -- PHP-FPM container (the only custom image in the chart).
+  # -- PHP-FPM container (the only custom image in the chart; public on GHCR).
   image:
     registry: ghcr.io
     repository: adithya-rajendran/nextcloud-fpm
@@ -37,13 +42,14 @@ nextcloud:
     digest: ""
     pullPolicy: IfNotPresent
 
-  # -- nginx sidecar (upstream, unmodified). Listens on 8080, talks to
-  # 127.0.0.1:9000 over loopback.
+  # -- nginx sidecar. nginx-unprivileged listens on 8080 and runs as UID 101 out
+  # of the box — a natural fit for runAsNonRoot + readOnlyRootFilesystem. Talks
+  # to 127.0.0.1:9000 over loopback.
   web:
     image:
-      registry: dhi.io
-      repository: nginx
-      tag: 1-compat
+      registry: docker.io
+      repository: nginxinc/nginx-unprivileged
+      tag: 1.27-alpine
       # Pin via scripts/pin-digests.sh (overrides tag when set).
       digest: ""
       pullPolicy: IfNotPresent
@@ -54,15 +60,35 @@ nextcloud:
       limits:
         cpu: 1
         memory: 256Mi
-    # nginx serves real client IP from this header, gated by the trusted-CIDR
-    # below. The pair (set_real_ip_from + real_ip_header) replaces the previous
-    # mod_remoteip patch.
+    # Real client IP handling. nginx rewrites the connection's source address
+    # from a forwarded header, but ONLY when the request arrives from a trusted
+    # CIDR (set_real_ip_from). Leave trustedCidrs empty to disable the rewrite
+    # entirely (Nextcloud then sees the proxy IP — safe, never spoofable).
     realIp:
-      trustedCidr: 10.1.0.0/16
-      header: CF-Connecting-IP
+      # Behind a standard ingress controller / gateway / reverse proxy use the
+      # multi-valued X-Forwarded-For (recursive MUST be true). The Cloudflare
+      # addon (cloudflare.enabled) overrides this to the single-valued
+      # CF-Connecting-IP with recursive off.
+      header: X-Forwarded-For
+      # Walk X-Forwarded-For right-to-left, skipping trusted proxies, to find the
+      # real client. Required for multi-valued headers — the chart fails render
+      # if a multi-valued header is paired with recursive: false (spoofable).
+      recursive: true
+      # CIDR(s) trusted to set the real-IP header — your proxy's source range
+      # (ingress controller / gateway / cloudflared pods). A list. Empty disables
+      # real-IP rewriting. Find your pod CIDR with:
+      #   kubectl get nodes -o jsonpath='{.items[*].spec.podCIDR}'
+      trustedCidrs: []
+      # - 10.0.0.0/8
+    # TLS is terminated upstream (ingress, gateway, or cloudflared) and the
+    # origin Pod sees plain HTTP. Force HTTPS=on to PHP-FPM so Nextcloud sets the
+    # Secure cookie flag and emits https:// URLs. Set false only for a plain-HTTP
+    # end-to-end install (not recommended).
+    httpsBehindProxy: true
 
   replicas: 1
-  # RWO Cinder + shared PVCs ⇒ Recreate (rolling would Multi-Attach).
+  # Shared RWO PVCs between the fpm + nginx containers (same Pod) ⇒ Recreate;
+  # a rolling update would Multi-Attach the volume. Keep Recreate on any RWO SC.
   strategy:
     type: Recreate
 
@@ -102,8 +128,8 @@ nextcloud:
       allowPrivilegeEscalation: false
       readOnlyRootFilesystem: true
       runAsNonRoot: true
-      runAsUser: 65532    # dhi.io/nginx user is 'nonroot' UID 65532
-      runAsGroup: 65532
+      runAsUser: 101    # nginxinc/nginx-unprivileged user is UID 101
+      runAsGroup: 101
       capabilities:
         drop: ["ALL"]
 
@@ -115,28 +141,31 @@ nextcloud:
     enabled: true
     maxUnavailable: 0
 
-  # Service in front of the Pod's nginx container.
+  # Service in front of the Pod's nginx container. Stays ClusterIP — an Ingress,
+  # Gateway API HTTPRoute, or the Cloudflare addon fronts it. Switch to
+  # LoadBalancer/NodePort only if you expose the Service directly.
   service:
     type: ClusterIP
     port: 80
-    # CF-tunnel hits this. Keep at 8080 — matches nginx listener inside the pod.
+    # Must match the nginx listener inside the pod (8080).
     targetPort: 8080
     annotations: {}
 
-  # Persistence — RWO Cinder. `accessModes` is a list for K8s API shape but
-  # only `ReadWriteOnce` is ever valid here: the Nextcloud pod shares the
-  # PVC between fpm (RW) and nginx (RO), but they're in the same pod. RWX is
-  # not supported by Cinder and would Multi-Attach on a rolling restart.
+  # Persistence. accessModes is a list for K8s API shape, but the fpm + nginx
+  # containers share the PVC inside ONE Pod, so ReadWriteOnce is correct and
+  # works on any provisioner. RWX is not required.
   persistence:
     webroot:
       size: 10Gi
-      storageClassName: csi-cinder-sc-retain
+      # Empty ⇒ the cluster's default StorageClass. Set explicitly to pin one
+      # (e.g. a retain-policy class so data survives uninstall).
+      storageClassName: ""
       accessModes: ["ReadWriteOnce"]
-      # Existing PVC name to mount instead of creating new (Phase 2 migration).
+      # Existing PVC name to mount instead of creating new (migration handle).
       existingClaim: ""
     data:
       size: 100Gi
-      storageClassName: csi-cinder-sc-retain
+      storageClassName: ""
       accessModes: ["ReadWriteOnce"]
       existingClaim: ""
 
@@ -148,16 +177,14 @@ nextcloud:
 
   # Server-side settings (templated into a config.php overlay).
   settings:
-    overwriteHost: drive.example.net
+    # Public-facing hostname. Change to your domain. Used everywhere Nextcloud
+    # emits its own URLs.
+    overwriteHost: nextcloud.example.com
     overwriteProtocol: https
     overwriteCliUrl: ""   # auto-derived from overwriteHost+Protocol if empty
     trustedDomains:
       - localhost
-      - drive.example.net
-    trustedProxies:
-      - 10.1.0.0/16
-    forwardedForHeaders:
-      - HTTP_CF_CONNECTING_IP
+      - nextcloud.example.com
     defaultPhoneRegion: US
     maintenanceWindowStart: 11
     # Upload / memory tuning.
@@ -166,9 +193,10 @@ nextcloud:
     # PHP custom.ini settings — keep the security defaults.
     customPhp: |
       ; Force Secure flag on session cookies — Nextcloud's __Host- cookie prefix
-      ; only fires when session.cookie_secure is on. cloudflared terminates TLS,
-      ; so the origin sees HTTP but the browser sees HTTPS; the Secure flag has
-      ; to be explicitly forced or the cookie will be issued without it.
+      ; only fires when session.cookie_secure is on. TLS is terminated upstream
+      ; (ingress / gateway / cloudflared), so the origin sees HTTP but the browser
+      ; sees HTTPS; the Secure flag has to be explicitly forced or the cookie will
+      ; be issued without it.
       session.cookie_secure = on
       session.cookie_samesite = Lax
 
@@ -196,20 +224,21 @@ nextcloud:
         memory: 1Gi
 
   # DB migration Job, run as a post-install / post-upgrade hook.
-  # Idempotent: the four occ db:add-missing-* commands are safe to re-run.
+  # Idempotent: the occ db:add-missing-* commands are safe to re-run.
   # Uses `kubectl exec` into the live Pod — does NOT mount the RWO PVC, so the
-  # v1.11 Multi-Attach failure mode is structurally impossible.
+  # Multi-Attach failure mode is structurally impossible.
   # Shared kubectl image used by:
   #   - templates/nextcloud/cronjob-occ-cron.yaml  (every 5 min)
   #   - templates/nextcloud/job-db-migrate.yaml    (post-install/upgrade hook)
-  # dhi.io/kubectl:1 is distroless (no /bin/sh). Templates pass kubectl args
-  # directly and run multi-step migrations inside the nextcloud-fpm Pod (which
-  # has bash) via `kubectl exec ... -- sh -c <script>`.
+  # The image's entrypoint is `kubectl`; templates pass kubectl args directly and
+  # run multi-step migrations inside the nextcloud-fpm Pod (which has a shell) via
+  # `kubectl exec ... -- sh -c <script>`. HOME=/tmp keeps the kubectl cache on a
+  # writable emptyDir under readOnlyRootFilesystem.
   kubectl:
     image:
-      registry: dhi.io
-      repository: kubectl
-      tag: "1"
+      registry: docker.io
+      repository: rancher/kubectl
+      tag: v1.31.4
       # Pin via scripts/pin-digests.sh (overrides tag when set).
       digest: ""
       pullPolicy: IfNotPresent
@@ -220,8 +249,8 @@ nextcloud:
       requests: { cpu: 50m, memory: 64Mi }
       limits:   { cpu: 500m, memory: 256Mi }
     backoffLimit: 3
-    # On a fresh install the rollout-wait alone can take 5-10 min on slow
-    # Cinder (initdb + first /var/www/html copy + maintenance:install).
+    # On a fresh install the rollout-wait alone can take several minutes on slow
+    # storage (initdb + first /var/www/html copy + maintenance:install).
     # Raise both values together if you see Job DeadlineExceeded.
     activeDeadlineSeconds: 900
     rolloutStatusTimeoutSeconds: 600
@@ -229,19 +258,17 @@ nextcloud:
 # -----------------------------------------------------------------------------
 # Postgres
 #
-# DHI's postgres image starts at major version 18 (no 16/17 published as of
-# 2026-05). 18 is outside Nextcloud 33.0.3's officially-tested matrix (13-17)
-# but works in practice (no SQL-incompatible changes). Pinning here.
-# If you want a tested version, override to docker.io/library/postgres:17
-# (or :16 to match AFFiNE pgvector:pg16) - lose hardening on this one Pod,
-# gain Nextcloud-vendor support coverage.
+# Default is the official postgres Alpine image. The Alpine variant runs as UID
+# 70 (matching this chart's securityContext) and honors /docker-entrypoint-initdb.d/.
+# Tag 17 is within Nextcloud 33's tested matrix. Override postgres.image to use a
+# different variant/version.
 # -----------------------------------------------------------------------------
 postgres:
   enabled: true
   image:
-    registry: dhi.io
-    repository: postgres
-    tag: "18"
+    registry: docker.io
+    repository: library/postgres
+    tag: 17-alpine
     # Pin via scripts/pin-digests.sh (overrides tag when set).
     digest: ""
     pullPolicy: IfNotPresent
@@ -250,21 +277,21 @@ postgres:
     requests: { cpu: 100m, memory: 256Mi }
     limits:   { cpu: "1",  memory: 1Gi }
 
-  # Persistence — RWO Cinder, retain on uninstall.
+  # Persistence. Empty storageClassName ⇒ cluster default StorageClass.
   persistence:
     size: 10Gi
-    storageClassName: csi-cinder-sc-retain
+    storageClassName: ""
     accessModes: ["ReadWriteOnce"]
 
   # Database / user / external Secret reference.
-  # Secret keys expected: `postgres-password` (superuser), `nextcloud-db-password` (app user).
+  # Secret key expected: `nextcloud-db-password`.
   auth:
     database: nextcloud
     username: nextcloud
     existingSecret: ""    # REQUIRED — name of pre-created K8s Secret
 
-  # Postgres user/group inside the dhi/postgres image. Standard Postgres image is 999.
-  # DHI postgres user is 'postgres' UID 70 (Wolfi/Alpine convention).
+  # Postgres user/group. The official postgres Alpine image uses UID 70.
+  # (The Debian variant uses 999 — adjust here if you switch to it.)
   podSecurityContext:
     runAsNonRoot: true
     runAsUser: 70
@@ -288,9 +315,9 @@ postgres:
 valkey:
   enabled: true
   image:
-    registry: dhi.io
-    repository: valkey
-    tag: "9"
+    registry: docker.io
+    repository: valkey/valkey
+    tag: 8-alpine
     # Pin via scripts/pin-digests.sh (overrides tag when set).
     digest: ""
     pullPolicy: IfNotPresent
@@ -308,12 +335,12 @@ valkey:
 
   # No persistence: cache only. Valkey unconditionally uses emptyDir.
 
-  # DHI valkey is 'nonroot' UID 65532.
+  # The official valkey image runs as UID 999.
   podSecurityContext:
     runAsNonRoot: true
-    runAsUser: 65532
-    runAsGroup: 65532
-    fsGroup: 65532
+    runAsUser: 999
+    runAsGroup: 999
+    fsGroup: 999
     seccompProfile:
       type: RuntimeDefault
   containerSecurityContext:
@@ -326,14 +353,19 @@ valkey:
     port: 6379
 
 # -----------------------------------------------------------------------------
-# ClamAV
+# ClamAV (optional antivirus — disabled by default)
+#
+# Heavy: 1–3 GiB RAM and a ~250 MB signature download on every cold start. Enable
+# only if you want on-upload virus scanning. The public clamav/clamav image runs
+# the daemon as UID 100 via its unprivileged entrypoint — validate on your cluster
+# when enabling (some clusters need the runAsUser tuned to the image build).
 # -----------------------------------------------------------------------------
 clamav:
-  enabled: true
+  enabled: false
   image:
-    registry: dhi.io
-    repository: clamav
-    tag: 1.5-base
+    registry: docker.io
+    repository: clamav/clamav
+    tag: "1.4"
     # Pin via scripts/pin-digests.sh (overrides tag when set).
     digest: ""
     pullPolicy: IfNotPresent
@@ -342,12 +374,12 @@ clamav:
     requests: { cpu: 250m, memory: 1Gi }
     limits:   { cpu: "2",  memory: 3Gi }
 
-  # dhi.io/clamav runs as 'clamav' UID 65532 from the start.
+  # clamav/clamav runs the daemon as the 'clamav' user (UID 100).
   podSecurityContext:
     runAsNonRoot: true
-    runAsUser: 65532
-    runAsGroup: 65532
-    fsGroup: 65532
+    runAsUser: 100
+    runAsGroup: 100
+    fsGroup: 100
     seccompProfile:
       type: RuntimeDefault
   containerSecurityContext:
@@ -357,34 +389,148 @@ clamav:
       drop: ["ALL"]
 
   # Signatures live on emptyDir; freshclam re-downloads (~250 MB) on cold start.
-  # Saves a Cinder volume slot vs. PVC.
   signaturesEmptyDirSize: 1Gi
 
   service:
     port: 3310
 
 # -----------------------------------------------------------------------------
-# NetworkPolicy (publicly-exposed install ⇒ on by default)
+# Ingress (disabled by default)
+#
+# Standard networking.k8s.io/v1 Ingress. Enable and set host + ingressClassName.
+# TLS is terminated by the ingress controller; the chart's nginx forces HTTPS=on
+# to PHP-FPM (see nextcloud.web.httpsBehindProxy). Remember to set
+# nextcloud.web.realIp.trustedCidrs to the ingress controller's pod CIDR and add
+# the controller's namespace to networkPolicy.nextcloudIngressFrom.
 # -----------------------------------------------------------------------------
-networkPolicy:
-  enabled: true
-  # Namespace where cloudflared runs. Only Pods labeled app=cloudflared in this
-  # namespace can reach the nextcloud Service.
-  cfTunnel:
+ingress:
+  enabled: false
+  className: ""
+  host: nextcloud.example.com
+  # Extra path entries are uncommon; the single "/" Prefix rule covers Nextcloud.
+  pathType: Prefix
+  annotations: {}
+  # cert-manager example:
+  #   cert-manager.io/cluster-issuer: letsencrypt-prod
+  #   nginx.ingress.kubernetes.io/proxy-body-size: "16g"
+  tls:
+    enabled: false
+    secretName: ""   # TLS Secret holding the cert for `host`
+
+# -----------------------------------------------------------------------------
+# Gateway API HTTPRoute (disabled by default)
+#
+# For clusters using Gateway API (Envoy Gateway, Istio, Cilium Gateway, etc.).
+# Point parentRef at an existing Gateway. TLS is configured on the Gateway, not
+# here. As with Ingress, set realIp.trustedCidrs + networkPolicy.nextcloudIngressFrom.
+# -----------------------------------------------------------------------------
+gatewayApi:
+  enabled: false
+  parentRef:
+    name: ""              # REQUIRED when enabled — Gateway name
+    namespace: ""         # empty ⇒ same namespace as the release
+    sectionName: ""       # optional listener name on the Gateway
+  hostnames:
+    - nextcloud.example.com
+  annotations: {}
+
+# -----------------------------------------------------------------------------
+# Cloudflare addon (disabled by default)
+#
+# When enabled, the chart:
+#   * (tunnel.enabled) deploys a hardened cloudflared Deployment in this namespace
+#   * opens a NetworkPolicy ingress rule from the cloudflared pods to Nextcloud
+#   * switches nginx real-IP handling to CF-Connecting-IP (single-valued,
+#     recursive off) using cloudflare.realIp.trustedCidrs
+# You still create the tunnel + Public Hostname in the Cloudflare dashboard and
+# point it at http://<nextcloud-svc>.<ns>.svc.cluster.local:80.
+# -----------------------------------------------------------------------------
+cloudflare:
+  enabled: false
+
+  tunnel:
+    # Deploy cloudflared as part of this chart. Set false to run cloudflared
+    # yourself elsewhere (then fill cloudflare.externalTunnel below).
+    enabled: true
+    image:
+      registry: docker.io
+      repository: cloudflare/cloudflared
+      tag: "2024.12.2"
+      digest: ""
+      pullPolicy: IfNotPresent
+    replicas: 2
+    # Token-based tunnel. Pre-create a Secret with key `tunnel-token`:
+    #   kubectl -n <ns> create secret generic <release>-cloudflared \
+    #     --from-literal=tunnel-token='<TOKEN-FROM-DASHBOARD>'
+    # or: scripts/bootstrap-secrets.sh --cloudflare-token '<TOKEN>'
+    existingSecret: ""    # REQUIRED when tunnel.enabled
+    extraArgs: []
+    resources:
+      requests: { cpu: 50m, memory: 64Mi }
+      limits:   { cpu: 500m, memory: 256Mi }
+    podSecurityContext:
+      runAsNonRoot: true
+      runAsUser: 65532
+      runAsGroup: 65532
+      seccompProfile:
+        type: RuntimeDefault
+    containerSecurityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      runAsNonRoot: true
+      runAsUser: 65532
+      runAsGroup: 65532
+      capabilities:
+        drop: ["ALL"]
+
+  # Only used when tunnel.enabled is false (you run cloudflared elsewhere). The
+  # NetworkPolicy ingress rule selects pods with this label in this namespace.
+  externalTunnel:
     namespace: cf-tunnel
     podLabel:
       key: app
       value: cloudflared
-  # CIDRs treated as "in-cluster" by the public-egress `except` block. Egress
-  # to anything inside these CIDRs must go through the explicit per-Service
-  # rules above, NOT the 0.0.0.0/0 fallback. List BOTH the pod CIDR AND your
-  # cluster's Service CIDR — egress to a ClusterIP VIP on 80/443 (e.g. the
-  # kube-apiserver) would otherwise escape through the public-egress rule.
-  # On Canonical K8s the Service CIDR is typically 10.152.183.0/24; upstream
-  # K8s default is 10.96.0.0/12. Find yours via:
+
+  # Real-IP settings applied when cloudflare.enabled (overrides nextcloud.web.realIp).
+  realIp:
+    header: CF-Connecting-IP
+    # cloudflared pod CIDR. If tunnel.enabled, cloudflared runs in THIS namespace,
+    # so this is the cluster pod CIDR.
+    trustedCidrs: []
+    # - 10.0.0.0/8
+
+# -----------------------------------------------------------------------------
+# NetworkPolicy (publicly-exposed install ⇒ on by default)
+# -----------------------------------------------------------------------------
+networkPolicy:
+  enabled: true
+  # Who may reach the Nextcloud Service on the HTTP port. A list of raw
+  # NetworkPolicyPeer entries (namespaceSelector / podSelector / ipBlock). Set
+  # this to your ingress controller or gateway. The Cloudflare addon adds its own
+  # source automatically when cloudflare.enabled. Empty + no Cloudflare ⇒ the Pod
+  # accepts no external ingress (safe default until you pick an exposure method).
+  #
+  # Example — ingress-nginx:
+  #   - namespaceSelector:
+  #       matchLabels:
+  #         kubernetes.io/metadata.name: ingress-nginx
+  # Example — Envoy Gateway:
+  #   - namespaceSelector:
+  #       matchLabels:
+  #         kubernetes.io/metadata.name: envoy-gateway-system
+  nextcloudIngressFrom: []
+
+  # CIDRs treated as "in-cluster" by the public-egress `except` block. Egress to
+  # anything inside these CIDRs must go through the explicit per-Service rules,
+  # NOT the 0.0.0.0/0 fallback. Defaults to the RFC1918 ranges, which cover the
+  # pod + Service CIDRs of essentially every cluster. Narrow to your exact pod +
+  # Service CIDRs for tighter egress control. Find them with:
+  #   kubectl get nodes -o jsonpath='{.items[*].spec.podCIDR}'
   #   kubectl cluster-info dump | grep -m1 service-cluster-ip-range
   inClusterCidrs:
-    - 10.1.0.0/16
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
   # Allow egress to the public internet for app updates, federation, etc.
   # Set to false to lock down further (Nextcloud may surface errors).
   allowAllEgress: true
@@ -395,9 +541,9 @@ networkPolicy:
 tests:
   enabled: true
   image:
-    registry: dhi.io
-    repository: curl
-    tag: 8-alpine3.23
+    registry: docker.io
+    repository: curlimages/curl
+    tag: 8.11.1
     # Pin via scripts/pin-digests.sh (overrides tag when set).
     digest: ""
     pullPolicy: IfNotPresent

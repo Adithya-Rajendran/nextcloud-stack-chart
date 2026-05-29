@@ -6,8 +6,9 @@ into the live Nextcloud Pod.
 concurrencyPolicy: Forbid prevents the oc_filecache_extended PK race
 (two parallel cron runs colliding on the same global filecache row).
 
-The pod uses dhi.io/kubectl:1 (distroless), so command/args are kubectl
-arguments directly — no shell wrapper.
+The kubectl image's entrypoint is `kubectl`, so args are kubectl arguments
+directly — no shell wrapper. HOME=/tmp keeps kubectl's discovery cache on a
+writable emptyDir under readOnlyRootFilesystem.
 */}}
 {{- $fullname := include "nextcloud-stack.nextcloud.fullname" . -}}
 apiVersion: batch/v1
@@ -55,7 +56,9 @@ spec:
                 readOnlyRootFilesystem: true
                 capabilities:
                   drop: ["ALL"]
-              # dhi.io/kubectl:1 entrypoint is `kubectl`. Pass exec args directly.
+              env:
+                - { name: HOME, value: /tmp }
+              # The kubectl image entrypoint is `kubectl`. Pass exec args directly.
               # Uses /var/www/html/cron.php (the canonical Nextcloud cron entry
               # point) rather than `occ background:cron` so we don't bind to
               # the changing occ-subcommand naming across Nextcloud versions.

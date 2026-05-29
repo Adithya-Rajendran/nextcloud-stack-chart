@@ -13,11 +13,12 @@ Why kubectl exec (not a Pod that mounts the PVC):
   - The PVC is RWO Cinder and the live Pod has it. A second mount fails
     Multi-Attach (the v1.11 bug). Exec sidesteps the volume entirely.
 
-Pod layout with distroless kubectl (dhi.io/kubectl:1, no /bin/sh):
+Pod layout (the kubectl image entrypoint is `kubectl`):
   - initContainer `wait`: kubectl args only, blocks on `rollout status`.
   - main container `migrate`: one kubectl exec into the nextcloud-fpm Pod
-    (which DOES have bash) and runs the migration loop inside it via
-    `sh -c <heredoc>`. Outer pod never invokes a shell.
+    (which DOES have a shell) and runs the migration loop inside it via
+    `sh -c <heredoc>`. The outer pod never invokes a shell itself.
+HOME=/tmp keeps kubectl's cache on a writable emptyDir under readOnlyRootFilesystem.
 */}}
 {{- $fullname := include "nextcloud-stack.nextcloud.fullname" . -}}
 apiVersion: batch/v1
@@ -59,6 +60,8 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+          env:
+            - { name: HOME, value: /tmp }
           args:
             - rollout
             - status
@@ -81,6 +84,8 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+          env:
+            - { name: HOME, value: /tmp }
           # One `kubectl exec` — all multi-step logic runs INSIDE the nextcloud
           # pod (which has bash). The outer pod never invokes a shell.
           args:

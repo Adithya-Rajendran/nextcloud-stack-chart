@@ -41,12 +41,12 @@ spec:
           securityContext:
             {{- toYaml .Values.postgres.containerSecurityContext | nindent 12 }}
           env:
-            # Bootstrap directly as the nextcloud user/db. DHI postgres does
-            # NOT honor /docker-entrypoint-initdb.d/, so we can't run a separate
-            # CREATE USER script. The upstream POSTGRES_USER env var is the
-            # canonical (and DHI-supported) way to bootstrap. As the bootstrap
-            # superuser, nextcloud owns the database AND the public schema —
-            # the Postgres-15+ schema-permission gotcha vanishes.
+            # Bootstrap directly as the nextcloud user/db via the upstream
+            # POSTGRES_* env vars — the canonical way, and the one that works on
+            # both the public image and the DHI overlay (DHI's postgres doesn't
+            # honor /docker-entrypoint-initdb.d/). As the bootstrap superuser,
+            # nextcloud owns the database AND the public schema — the Postgres-15+
+            # schema-permission gotcha vanishes.
             - name: POSTGRES_USER
               value: {{ .Values.postgres.auth.username | quote }}
             - name: POSTGRES_DB
