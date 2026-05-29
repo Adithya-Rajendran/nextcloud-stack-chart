@@ -87,9 +87,12 @@ jobs:
               --set cloudflare.enabled=true > /dev/null 2>&1; then
             echo "FAIL: cloudflare tunnel without existingSecret should error"; exit 1
           fi
-          # Docker Hardened Images overlay.
-          helm template test . -f example-values.yaml -f values-dhi.yaml > /tmp/dhi.yaml
-          grep -q 'dhi.io/nginx' /tmp/dhi.yaml
+          # Public-images overlay (default images are DHI; this swaps to Docker Hub).
+          helm template test . -f example-values.yaml -f values-public.yaml > /tmp/public.yaml
+          grep -q 'nginxinc/nginx-unprivileged' /tmp/public.yaml
+          if grep -q 'dhi.io' /tmp/public.yaml; then
+            echo "FAIL: values-public.yaml should leave no dhi.io references"; exit 1
+          fi
           echo "OK: exposure + addon variants render"
 
       - name: Install kubeconform
@@ -104,7 +107,7 @@ jobs:
       # CRDs with no built-in schema (the Gateway API HTTPRoute).
       - name: kubeconform
         run: |
-          for f in /tmp/rendered.yaml /tmp/gw.yaml /tmp/cf.yaml /tmp/dhi.yaml; do
+          for f in /tmp/rendered.yaml /tmp/gw.yaml /tmp/cf.yaml /tmp/public.yaml; do
             echo "== $f =="
             kubeconform -strict -ignore-missing-schemas -summary \
               -kubernetes-version 1.32.0 \

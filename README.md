@@ -4,27 +4,29 @@ A self-hostable Helm chart for Nextcloud on Kubernetes: PHP-FPM + nginx in one
 Pod, Postgres, Valkey, and optional ClamAV — all in templates we own, no
 subcharts, no out-of-chart patches, no re-apply checklist on upgrade.
 
-It ships with **public images and sane defaults so anyone can install it**, and
-exposes Nextcloud through your choice of **Ingress**, **Gateway API**, or the
-optional **Cloudflare tunnel addon**.
+It's **security-first**: every image defaults to a [Docker Hardened Image](https://www.docker.com/products/hardened-images/)
+(`dhi.io/*`) — minimal, non-root, CVE-scanned. That's the differentiator. No DHI
+subscription? A one-line overlay (`-f values-public.yaml`) swaps in public Docker
+Hub images. Expose Nextcloud through your choice of **Ingress**, **Gateway API**,
+or the optional **Cloudflare tunnel addon**.
 
 ## What's in it
 
-| Component | Default image | Notes |
+| Component | Default image (DHI) | Notes |
 |---|---|---|
-| `php`   | `ghcr.io/adithya-rajendran/nextcloud-fpm:33.0.3-fpm` | PHP-FPM. The only custom image. Built by [nextcloud-images](https://github.com/adithya-rajendran/nextcloud-images). UID 33. |
-| `web`   | `nginxinc/nginx-unprivileged:1.27-alpine` | Sidecar in the same Pod. Listens 8080, runs as UID 101. |
-| `postgres` | `postgres:17-alpine` | StatefulSet, single replica, RWO. Alpine variant runs as UID 70. |
-| `valkey` | `valkey/valkey:8-alpine` | Redis-wire-compatible. Auth on by default. UID 999. |
-| `clamav` | `clamav/clamav:1.4` | **Disabled by default** (heavy). On-upload AV. UID 100. |
-| `kubectl` | `rancher/kubectl:v1.31.4` | Cron CronJob + post-install db-migrate Job. Entrypoint is `kubectl`. |
-| `curl` | `curlimages/curl:8.11.1` | `helm test`. |
-| `cloudflared` | `cloudflare/cloudflared:2024.12.2` | **Only with the Cloudflare addon.** UID 65532. |
+| `php`   | `ghcr.io/adithya-rajendran/nextcloud-fpm:33.0.3-fpm` | PHP-FPM. The only custom image (public on GHCR). Built by [nextcloud-images](https://github.com/adithya-rajendran/nextcloud-images). UID 33. |
+| `web`   | `dhi.io/nginx:1-compat` | Sidecar in the same Pod. Listens 8080. UID 65532. |
+| `postgres` | `dhi.io/postgres:18` | StatefulSet, single replica, RWO. UID 70. |
+| `valkey` | `dhi.io/valkey:9` | Redis-wire-compatible. Auth on by default. UID 65532. |
+| `clamav` | `dhi.io/clamav:1.5-base` | On-upload AV (heavy). Unprivileged entrypoint, UID 65532. |
+| `kubectl` | `dhi.io/kubectl:1` | Cron CronJob + post-install db-migrate Job. Distroless; entrypoint is `kubectl`. |
+| `curl` | `dhi.io/curl:8-alpine3.23` | `helm test`. |
+| `cloudflared` | `cloudflare/cloudflared:2024.12.2` | **Only with the Cloudflare addon.** No DHI image exists; upstream distroless, UID 65532. |
 
-> **Want the maintainer's hardened image set?** Pass `-f values-dhi.yaml` to swap
-> every image for its [Docker Hardened Image](https://www.docker.com/products/hardened-images/)
-> equivalent (`dhi.io/*`). Those are minimal, non-root, CVE-scanned — but behind
-> a paid Docker subscription, so they need an `imagePullSecret`. See that file.
+> **No Docker Hardened Images subscription?** Pass `-f values-public.yaml` to swap
+> every image for a public Docker Hub equivalent (nginx-unprivileged, postgres,
+> valkey, rancher/kubectl, curlimages/curl). No pull secret needed. DHI is a paid
+> subscription and needs an `imagePullSecret` (see [Install](#install)).
 
 ## What's deliberately NOT in it
 
@@ -128,8 +130,10 @@ a multi-valued header is paired with `recursive: false`, which would be spoofabl
   [`scripts/bootstrap-secrets.sh`](scripts/bootstrap-secrets.sh), then point the
   chart at them via `*.auth.existingSecret`. Keeps secret material out of Helm
   release metadata. The chart fails render if a required `existingSecret` is empty.
-- **`runAsNonRoot` everywhere**, per-image UIDs (fpm 33, nginx 101, postgres 70,
-  valkey 999, clamav 100; cron/migrate/test/cloudflared pods pinned to 65532).
+- **`runAsNonRoot` everywhere.** With the default DHI images, nginx/valkey/clamav
+  and the cron/migrate/test/cloudflared pods run as UID 65532, postgres as 70, fpm
+  as 33. (The public overlay uses the public images' UIDs: nginx 101, valkey 999,
+  clamav 100.)
 - **`readOnlyRootFilesystem: true`** wherever the app doesn't need to write its
   own image (nginx, valkey, kubectl, curl, cloudflared).
 - **`drop: ["ALL"]`**, `allowPrivilegeEscalation: false`,
@@ -198,24 +202,29 @@ Run from the chart root (the directory with this README).
 # 1. Pre-create Secrets.
 ./scripts/bootstrap-secrets.sh --namespace nextcloud --release nextcloud-stack
 
-# 2. (Optional) pin every image to its current digest.
+# 2. DHI pull secret (default images live on dhi.io — a paid subscription).
+#    For public images instead: skip this and add `-f values-public.yaml` below.
+kubectl -n nextcloud create secret docker-registry dhi-pull \
+    --docker-server=dhi.io --docker-username=<user> \
+    --docker-password='<docker-pat>' --docker-email=<email>
+
+# 3. (Optional) pin every image to its current digest.
 ./scripts/pin-digests.sh > pins.yaml
 
-# 3. Render + dry-run.
+# 4. Render to eyeball it.
 helm template . -n nextcloud -f example-values.yaml -f pins.yaml | less
-helm install --dry-run --debug nextcloud-stack . \
-    -n nextcloud --create-namespace -f example-values.yaml -f pins.yaml
 
-# 4. Install. example-values.yaml exposes via Ingress — edit host/class first.
+# 5. Install. example-values.yaml exposes via Ingress — edit host/class first.
 helm install nextcloud-stack . \
     -n nextcloud --create-namespace -f example-values.yaml -f pins.yaml
 
-# 5. Smoke test.
+# 6. Smoke test.
 helm test nextcloud-stack -n nextcloud
 ```
 
-Drop `-f pins.yaml` to skip digest pinning. Add `-f values-dhi.yaml` (after the
-others) to use the Docker Hardened Images.
+Drop `-f pins.yaml` to skip digest pinning. For public images (no DHI
+subscription), skip the pull secret and add `-f values-public.yaml` to the
+`helm template`/`helm install` commands.
 
 ## Upgrade
 
@@ -292,7 +301,8 @@ See [`values.yaml`](values.yaml) for the full surface. Most users touch:
 - `networkPolicy.nextcloudIngressFrom`
 
 [`example-values.yaml`](example-values.yaml) is a working minimal config behind
-ingress-nginx. [`values-dhi.yaml`](values-dhi.yaml) is the hardened-image overlay.
+ingress-nginx. [`values-public.yaml`](values-public.yaml) swaps the default DHI
+images for public Docker Hub ones.
 
 ## Why `kubectl exec` for the migration / cron Jobs?
 

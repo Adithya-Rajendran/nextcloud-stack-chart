@@ -1,12 +1,14 @@
 # nextcloud-stack — default values.
 #
-# These defaults are designed to work on ANY conformant Kubernetes cluster with
-# public images and a default StorageClass. Most users override a small subset in
-# a `-f my-values.yaml` file. See `example-values.yaml` for a realistic config.
+# Security-first: images default to Docker Hardened Images (DHI, dhi.io) — minimal,
+# non-root, CVE-scanned. DHI is a paid Docker subscription, so the default install
+# needs an imagePullSecret (see imagePullSecrets below).
 #
-# Opt-in overlays shipped with the chart:
-#   -f values-dhi.yaml   Docker Hardened Images (paid subscription) — the
-#                        maintainer's hardened image set. Needs imagePullSecrets.
+# No DHI subscription? Use public images instead with the bundled overlay:
+#   -f values-public.yaml   public images on Docker Hub, no pull secret needed.
+#
+# Most users override a small subset in a `-f my-values.yaml` file. See
+# `example-values.yaml` for a realistic config.
 #
 # SECURITY MODEL
 # --------------
@@ -24,8 +26,12 @@ fullnameOverride: ""
 # Common labels added to every resource.
 commonLabels: {}
 
-# Image-pull secrets. Not needed for the public default images. Required only
-# for private registries (e.g. the optional DHI overlay, or a private mirror).
+# Image-pull secrets. The default DHI images live on dhi.io (subscription
+# registry) and need one. Create it and reference it here:
+#   kubectl -n <ns> create secret docker-registry dhi-pull \
+#     --docker-server=dhi.io --docker-username=<user> \
+#     --docker-password='<docker-pat>' --docker-email=<email>
+# Not needed when using -f values-public.yaml.
 imagePullSecrets: []
 # - name: dhi-pull
 
@@ -42,14 +48,14 @@ nextcloud:
     digest: ""
     pullPolicy: IfNotPresent
 
-  # -- nginx sidecar. nginx-unprivileged listens on 8080 and runs as UID 101 out
-  # of the box — a natural fit for runAsNonRoot + readOnlyRootFilesystem. Talks
-  # to 127.0.0.1:9000 over loopback.
+  # -- nginx sidecar (DHI nginx, runs as nonroot UID 65532). Listens on 8080 and
+  # talks to 127.0.0.1:9000 over loopback. `1-compat` (not `:1`) keeps a shell in
+  # the image. The public overlay swaps this for nginxinc/nginx-unprivileged.
   web:
     image:
-      registry: docker.io
-      repository: nginxinc/nginx-unprivileged
-      tag: 1.27-alpine
+      registry: dhi.io
+      repository: nginx
+      tag: 1-compat
       # Pin via scripts/pin-digests.sh (overrides tag when set).
       digest: ""
       pullPolicy: IfNotPresent
@@ -63,7 +69,7 @@ nextcloud:
     # Real client IP handling. nginx rewrites the connection's source address
     # from a forwarded header, but ONLY when the request arrives from a trusted
     # CIDR (set_real_ip_from). Leave trustedCidrs empty to disable the rewrite
-    # entirely (Nextcloud then sees the proxy IP — safe, never spoofable).
+    # entirely (Nextcloud then sees the proxy IP — never spoofable).
     realIp:
       # Behind a standard ingress controller / gateway / reverse proxy use the
       # multi-valued X-Forwarded-For (recursive MUST be true). The Cloudflare
@@ -128,8 +134,8 @@ nextcloud:
       allowPrivilegeEscalation: false
       readOnlyRootFilesystem: true
       runAsNonRoot: true
-      runAsUser: 101    # nginxinc/nginx-unprivileged user is UID 101
-      runAsGroup: 101
+      runAsUser: 65532    # dhi.io/nginx 'nonroot' user (UID 65532)
+      runAsGroup: 65532
       capabilities:
         drop: ["ALL"]
 
@@ -230,15 +236,15 @@ nextcloud:
   # Shared kubectl image used by:
   #   - templates/nextcloud/cronjob-occ-cron.yaml  (every 5 min)
   #   - templates/nextcloud/job-db-migrate.yaml    (post-install/upgrade hook)
-  # The image's entrypoint is `kubectl`; templates pass kubectl args directly and
-  # run multi-step migrations inside the nextcloud-fpm Pod (which has a shell) via
-  # `kubectl exec ... -- sh -c <script>`. HOME=/tmp keeps the kubectl cache on a
-  # writable emptyDir under readOnlyRootFilesystem.
+  # The image's entrypoint is `kubectl` (dhi.io/kubectl is distroless). Templates
+  # pass kubectl args directly and run multi-step migrations inside the
+  # nextcloud-fpm Pod (which has a shell) via `kubectl exec ... -- sh -c <script>`.
+  # HOME=/tmp keeps kubectl's cache on a writable emptyDir under readOnlyRootFilesystem.
   kubectl:
     image:
-      registry: docker.io
-      repository: rancher/kubectl
-      tag: v1.31.4
+      registry: dhi.io
+      repository: kubectl
+      tag: "1"
       # Pin via scripts/pin-digests.sh (overrides tag when set).
       digest: ""
       pullPolicy: IfNotPresent
@@ -258,17 +264,16 @@ nextcloud:
 # -----------------------------------------------------------------------------
 # Postgres
 #
-# Default is the official postgres Alpine image. The Alpine variant runs as UID
-# 70 (matching this chart's securityContext) and honors /docker-entrypoint-initdb.d/.
-# Tag 17 is within Nextcloud 33's tested matrix. Override postgres.image to use a
-# different variant/version.
+# DHI's postgres starts at major 18 (UID 70). 18 is just outside Nextcloud 33's
+# officially-tested matrix (13–17) but works in practice. The public overlay uses
+# postgres:17-alpine (also UID 70) for a vendor-tested version.
 # -----------------------------------------------------------------------------
 postgres:
   enabled: true
   image:
-    registry: docker.io
-    repository: library/postgres
-    tag: 17-alpine
+    registry: dhi.io
+    repository: postgres
+    tag: "18"
     # Pin via scripts/pin-digests.sh (overrides tag when set).
     digest: ""
     pullPolicy: IfNotPresent
@@ -290,8 +295,8 @@ postgres:
     username: nextcloud
     existingSecret: ""    # REQUIRED — name of pre-created K8s Secret
 
-  # Postgres user/group. The official postgres Alpine image uses UID 70.
-  # (The Debian variant uses 999 — adjust here if you switch to it.)
+  # Postgres user/group. dhi.io/postgres is UID 70 (also the public Alpine UID).
+  # (The public Debian variant uses 999 — adjust here if you switch to it.)
   podSecurityContext:
     runAsNonRoot: true
     runAsUser: 70
@@ -315,9 +320,9 @@ postgres:
 valkey:
   enabled: true
   image:
-    registry: docker.io
-    repository: valkey/valkey
-    tag: 8-alpine
+    registry: dhi.io
+    repository: valkey
+    tag: "9"
     # Pin via scripts/pin-digests.sh (overrides tag when set).
     digest: ""
     pullPolicy: IfNotPresent
@@ -335,12 +340,12 @@ valkey:
 
   # No persistence: cache only. Valkey unconditionally uses emptyDir.
 
-  # The official valkey image runs as UID 999.
+  # dhi.io/valkey runs as 'nonroot' UID 65532. (Public valkey image is UID 999.)
   podSecurityContext:
     runAsNonRoot: true
-    runAsUser: 999
-    runAsGroup: 999
-    fsGroup: 999
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
     seccompProfile:
       type: RuntimeDefault
   containerSecurityContext:
@@ -353,19 +358,19 @@ valkey:
     port: 6379
 
 # -----------------------------------------------------------------------------
-# ClamAV (optional antivirus — disabled by default)
+# ClamAV (on-upload antivirus)
 #
-# Heavy: 1–3 GiB RAM and a ~250 MB signature download on every cold start. Enable
-# only if you want on-upload virus scanning. The public clamav/clamav image runs
-# the daemon as UID 100 via its unprivileged entrypoint — validate on your cluster
-# when enabling (some clusters need the runAsUser tuned to the image build).
+# Heavy: 1–3 GiB RAM and a ~250 MB signature download on every cold start. Uses
+# the DHI clamav image's unprivileged entrypoint (nonroot UID 65532). The public
+# overlay disables it by default (public clamav non-root needs per-cluster
+# validation). Set enabled: false to turn it off.
 # -----------------------------------------------------------------------------
 clamav:
-  enabled: false
+  enabled: true
   image:
-    registry: docker.io
-    repository: clamav/clamav
-    tag: "1.4"
+    registry: dhi.io
+    repository: clamav
+    tag: 1.5-base
     # Pin via scripts/pin-digests.sh (overrides tag when set).
     digest: ""
     pullPolicy: IfNotPresent
@@ -374,12 +379,12 @@ clamav:
     requests: { cpu: 250m, memory: 1Gi }
     limits:   { cpu: "2",  memory: 3Gi }
 
-  # clamav/clamav runs the daemon as the 'clamav' user (UID 100).
+  # dhi.io/clamav runs the daemon as 'nonroot' UID 65532. (Public image is UID 100.)
   podSecurityContext:
     runAsNonRoot: true
-    runAsUser: 100
-    runAsGroup: 100
-    fsGroup: 100
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
     seccompProfile:
       type: RuntimeDefault
   containerSecurityContext:
@@ -452,6 +457,8 @@ cloudflare:
     # Deploy cloudflared as part of this chart. Set false to run cloudflared
     # yourself elsewhere (then fill cloudflare.externalTunnel below).
     enabled: true
+    # cloudflared has no DHI image; this is the upstream distroless image, which
+    # already runs as nonroot (UID 65532).
     image:
       registry: docker.io
       repository: cloudflare/cloudflared
@@ -541,9 +548,9 @@ networkPolicy:
 tests:
   enabled: true
   image:
-    registry: docker.io
-    repository: curlimages/curl
-    tag: 8.11.1
+    registry: dhi.io
+    repository: curl
+    tag: 8-alpine3.23
     # Pin via scripts/pin-digests.sh (overrides tag when set).
     digest: ""
     pullPolicy: IfNotPresent

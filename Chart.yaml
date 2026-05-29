@@ -35,8 +35,8 @@ dependencies: []
 annotations:
   # Bumped each time the *manifest* shape changes meaningfully.
   artifacthub.io/changes: |
-    - kind: changed
-      description: Default to public images so anyone can install (DHI moved to values-dhi.yaml overlay)
+    - kind: added
+      description: Public-image overlay (values-public.yaml) for installs without a Docker Hardened Images subscription; DHI remains the default
     - kind: added
       description: Ingress and Gateway API (HTTPRoute) templates, both disabled by default
     - kind: added

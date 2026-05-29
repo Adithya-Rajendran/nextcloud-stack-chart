@@ -15,9 +15,9 @@
 #              (`go install github.com/google/go-containerregistry/cmd/crane@latest`)
 #   - yq       https://github.com/mikefarah/yq
 #
-# The default images are public. For a private/auth'd registry (e.g. the DHI
-# overlay, dhi.io): `crane auth login <registry>` first, and run with that file:
-#   scripts/pin-digests.sh values-dhi.yaml > pins-dhi.yaml
+# The default images include dhi.io (a private, subscription registry): run
+# `crane auth login dhi.io` first. Public-overlay users: render a merged values
+# file (helm template ... --show-only is not enough) and point this script at it.
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
