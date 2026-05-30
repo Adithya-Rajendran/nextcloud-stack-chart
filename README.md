@@ -102,11 +102,21 @@ then point the tunnel's Public Hostname at
 cloudflared yourself instead, set `cloudflare.tunnel.enabled: false` and fill
 `cloudflare.externalTunnel.{namespace,podLabel}`.
 
-> **NetworkPolicy gotcha:** with `networkPolicy.enabled: true` (the default), the
-> Nextcloud Pod only accepts ingress from sources you list in
-> `networkPolicy.nextcloudIngressFrom` — add your ingress controller's / gateway's
-> namespace there, or the Pod will reject its traffic. The Cloudflare addon adds
-> its own source automatically.
+> **NetworkPolicy (Cilium):** the chart renders **CiliumNetworkPolicy**
+> (`cilium.io/v2`), so it **requires Cilium**. The Cilium **Gateway** is allowed
+> automatically when `gatewayApi.enabled` (via `fromEntities: [ingress]` — standard
+> NetworkPolicy v1 can't select the gateway proxy's identity, which is why a
+> Gateway-fronted install needs the Cilium policy). The Cloudflare addon adds its
+> own source automatically. For any **other** front (e.g. a separate ingress
+> controller) add it to `networkPolicy.nextcloudIngressFrom` as a Cilium ingress
+> selector:
+> ```yaml
+> networkPolicy:
+>   nextcloudIngressFrom:
+>     - fromEndpoints:
+>         - matchLabels: { k8s:io.kubernetes.pod.namespace: ingress-nginx }
+> ```
+> On a non-Cilium CNI set `networkPolicy.enabled: false` and manage policy yourself.
 
 ## Real client IP
 
@@ -138,10 +148,12 @@ a multi-valued header is paired with `recursive: false`, which would be spoofabl
   own image (nginx, valkey, kubectl, curl, cloudflared).
 - **`drop: ["ALL"]`**, `allowPrivilegeEscalation: false`,
   `seccompProfile: RuntimeDefault` on every container.
-- **NetworkPolicies on by default.** Default-deny + per-component allows. The
-  Nextcloud Pod only accepts ingress from `networkPolicy.nextcloudIngressFrom`
-  (+ the Cloudflare source when enabled). Postgres/Valkey/ClamAV only accept
-  ingress from the Nextcloud Pod.
+- **CiliumNetworkPolicy on by default** (requires Cilium). Default-deny +
+  per-component allows. The Nextcloud Pod accepts ingress from the Cilium gateway
+  (`fromEntities: [ingress]` when `gatewayApi.enabled`), the Cloudflare source, and
+  anything in `networkPolicy.nextcloudIngressFrom`. Postgres/Valkey/ClamAV only
+  accept ingress from the Nextcloud Pod; public egress uses Cilium's identity-based
+  `world` entity (no CIDR list to maintain).
 - **Valkey config in a Secret**, not a ConfigMap — `requirepass` never lands in a
   cluster-readable resource.
 - **`automountServiceAccountToken: false`** on every Pod that doesn't talk to the
@@ -161,8 +173,11 @@ The chart's NetworkPolicy is load-bearing. It's the only thing keeping
   (`set_real_ip_from` trusts only `trustedCidrs`),
 - Nextcloud↔database traffic (plaintext) from in-cluster sniffers.
 
-If your CNI doesn't enforce v1 NetworkPolicy, every one of those controls is
-silently gone. Cilium and Calico enforce; flannel by default does not.
+The chart renders **CiliumNetworkPolicy** (`cilium.io/v2`), so it **requires
+Cilium**. This is deliberate: the Gateway API path needs `fromEntities: [ingress]`
+to allow the gateway proxy, which standard NetworkPolicy v1 cannot express. On a
+non-Cilium CNI set `networkPolicy.enabled: false` and bring your own equivalent
+policy — otherwise every one of those controls is silently gone.
 
 With the generic `X-Forwarded-For` mode, `recursive: true` means nginx walks the
 chain skipping trusted hops — so `trustedCidrs` must cover **every** proxy hop in
@@ -171,19 +186,18 @@ A single trusted hop (one ingress controller / gateway) is the common, safe case
 
 ### Cluster assumptions
 
-Two values are cluster-specific:
+One value is cluster-specific:
 
 - `nextcloud.web.realIp.trustedCidrs` (default empty) — your proxy's pod CIDR.
   Empty means real-IP rewriting is off and logs show the proxy pod IP.
-- `networkPolicy.inClusterCidrs` (default RFC1918) — CIDRs kept off the public
-  egress fallback. The default covers virtually every cluster; narrow it to your
-  exact pod + Service CIDRs for tighter egress control.
 
-Find both with:
 ```bash
 kubectl get nodes -o jsonpath='{.items[*].spec.podCIDR}'
-kubectl cluster-info dump | grep -m1 service-cluster-ip-range
 ```
+
+(`networkPolicy` no longer needs an in-cluster CIDR list — Cilium's identity-based
+`world` entity defines "outside the cluster" directly, replacing the old
+`inClusterCidrs` exception block.)
 
 ### Apply the PodSecurityStandards `restricted` profile
 
