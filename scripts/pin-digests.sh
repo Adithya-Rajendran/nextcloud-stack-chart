@@ -36,6 +36,7 @@ PATHS=(
   .postgres.image
   .valkey.image
   .clamav.image
+  .whiteboard.image
   .cloudflare.tunnel.image
   .tests.image
 )

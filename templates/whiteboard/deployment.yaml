@@ -1,0 +1,112 @@
+{{- if .Values.whiteboard.enabled }}
+{{/*
+Nextcloud Whiteboard backend — Node.js Socket.IO websocket server for the
+Whiteboard app. No DHI image exists (documented public-image exception, like
+cloudflared). Restricted-PSS compatible: nobody/65534, readOnlyRootFilesystem
+with HOME redirected to the /tmp emptyDir (npm writes $HOME/.npm at startup).
+
+HA: with multiple replicas the live board state must be shared, so the server
+runs the Socket.IO Redis-Streams adapter against the chart's Valkey
+(storageStrategy: redis). The in-memory "lww" strategy is single-instance only.
+*/}}
+{{- include "nextcloud-stack.requireSecret" (dict "existing" .Values.whiteboard.auth.existingSecret "section" "whiteboard.auth") -}}
+{{- $fullname := include "nextcloud-stack.whiteboard.fullname" . -}}
+{{- $secret := .Values.whiteboard.auth.existingSecret -}}
+{{- $useRedis := and (eq .Values.whiteboard.storageStrategy "redis") .Values.valkey.enabled -}}
+{{- if and (gt (int .Values.whiteboard.replicas) 1) (not $useRedis) }}
+{{- fail "whiteboard.replicas > 1 requires storageStrategy: redis AND valkey.enabled (replicas share live board state via the Valkey Socket.IO adapter). Set whiteboard.replicas: 1 for the in-memory 'lww' strategy, or enable Valkey + storageStrategy: redis for HA." }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "nextcloud-stack.whiteboard.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.whiteboard.replicas }}
+  strategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      {{- include "nextcloud-stack.whiteboard.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "nextcloud-stack.whiteboard.selectorLabels" . | nindent 8 }}
+        {{- with .Values.whiteboard.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.whiteboard.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- include "nextcloud-stack.imagePullSecrets" . | nindent 6 }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.whiteboard.podSecurityContext | nindent 8 }}
+      {{- with .Values.whiteboard.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- range . }}
+        - maxSkew: {{ .maxSkew }}
+          topologyKey: {{ .topologyKey }}
+          whenUnsatisfiable: {{ .whenUnsatisfiable }}
+          labelSelector:
+            matchLabels:
+              {{- include "nextcloud-stack.whiteboard.selectorLabels" $ | nindent 14 }}
+        {{- end }}
+      {{- end }}
+      containers:
+        - name: whiteboard
+          image: {{ include "nextcloud-stack.image" .Values.whiteboard.image }}
+          imagePullPolicy: {{ .Values.whiteboard.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.whiteboard.containerSecurityContext | nindent 12 }}
+          env:
+            - name: NEXTCLOUD_URL
+              value: {{ .Values.whiteboard.nextcloudUrl | quote }}
+            - name: PORT
+              value: {{ .Values.whiteboard.service.port | quote }}
+            - name: STORAGE_STRATEGY
+              value: {{ ternary "redis" "lww" $useRedis | quote }}
+            # JWT shared with Nextcloud (occ config:app:set whiteboard jwt_secret_key).
+            - name: JWT_SECRET_KEY
+              valueFrom: { secretKeyRef: { name: {{ $secret }}, key: jwt-secret-key } }
+            {{- if $useRedis }}
+            # Full redis://:<pw>@<valkey>:6379/<db> — kept in the Secret, never a ConfigMap.
+            - name: REDIS_URL
+              valueFrom: { secretKeyRef: { name: {{ $secret }}, key: redis-url } }
+            {{- end }}
+            # npm (the image entrypoint) writes $HOME/.npm + logs; redirect to the
+            # writable /tmp emptyDir so readOnlyRootFilesystem holds.
+            - { name: HOME, value: /tmp }
+            - { name: npm_config_cache, value: /tmp/.npm }
+            - { name: npm_config_logs_dir, value: /tmp/.npm-logs }
+          ports:
+            - name: http
+              containerPort: {{ .Values.whiteboard.service.port }}
+              protocol: TCP
+          startupProbe:
+            tcpSocket: { port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            tcpSocket: { port: http }
+            periodSeconds: 30
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            tcpSocket: { port: http }
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.whiteboard.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: { sizeLimit: 256Mi }
+{{- end }}

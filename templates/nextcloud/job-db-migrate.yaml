@@ -149,6 +149,32 @@ spec:
                 php -f /var/www/html/occ -- config:app:set files_antivirus "$key" --value="$val" -n
               done
 {{- end }}
+{{- if .Values.whiteboard.enabled }}
+              # ---- Whiteboard app + config (idempotent) ---------------------
+              echo "==> ensuring whiteboard app is installed"
+              if out=$(php -f /var/www/html/occ -- app:install whiteboard -n 2>&1); then
+                printf '%s\n' "$out"
+              else
+                printf '%s\n' "$out"
+                if printf '%s' "$out" | grep -qE 'already (installed|enabled|active)'; then
+                  php -f /var/www/html/occ -- app:enable whiteboard -n
+                else
+                  echo "occ app:install whiteboard failed unexpectedly — see output above" >&2
+                  exit 1
+                fi
+              fi
+              # Shared JWT (read from this pod's env, set on the nextcloud Deployment).
+              if [ -n "${WHITEBOARD_JWT_SECRET:-}" ]; then
+                php -f /var/www/html/occ -- config:app:set whiteboard jwt_secret_key --value="$WHITEBOARD_JWT_SECRET" -n
+              else
+                echo "WARNING: WHITEBOARD_JWT_SECRET not present in this pod — jwt_secret_key NOT set" >&2
+              fi
+{{- if .Values.whiteboard.publicUrl }}
+              php -f /var/www/html/occ -- config:app:set whiteboard collabBackendUrl --value="{{ .Values.whiteboard.publicUrl }}" -n
+{{- else }}
+              echo "NOTE: whiteboard.publicUrl unset — collabBackendUrl not configured; set it in Nextcloud admin settings."
+{{- end }}
+{{- end }}
 
               echo "db-migrate: OK"
           resources:

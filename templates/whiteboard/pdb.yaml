@@ -1,0 +1,18 @@
+{{- if and .Values.whiteboard.enabled .Values.whiteboard.pdb.enabled }}
+{{/*
+PodDisruptionBudget for the Whiteboard replicas. Unlike the singleton Nextcloud
+pod (maxUnavailable: 0), this is a horizontally-scaled Deployment, so keep at
+least one replica up during voluntary disruptions (node drain / upgrade).
+*/}}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "nextcloud-stack.whiteboard.fullname" . }}
+  labels:
+    {{- include "nextcloud-stack.whiteboard.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.whiteboard.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "nextcloud-stack.whiteboard.selectorLabels" . | nindent 6 }}
+{{- end }}

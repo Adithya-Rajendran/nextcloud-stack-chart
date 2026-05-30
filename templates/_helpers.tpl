@@ -145,6 +145,25 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 {{- end -}}
 
+{{- define "nextcloud-stack.whiteboard.fullname" -}}{{ include "nextcloud-stack.fullname" . }}-whiteboard{{- end -}}
+
+{{- define "nextcloud-stack.whiteboard.selectorLabels" -}}
+{{ include "nextcloud-stack.selectorLabels" . }}
+app.kubernetes.io/component: whiteboard
+{{- end -}}
+
+{{- define "nextcloud-stack.whiteboard.labels" -}}
+helm.sh/chart: {{ include "nextcloud-stack.chart" . }}
+{{ include "nextcloud-stack.whiteboard.selectorLabels" . }}
+{{- if .Chart.AppVersion }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- with .Values.commonLabels }}
+{{ toYaml . }}
+{{- end }}
+{{- end -}}
+
 {{/*
 Image reference. Prefers digest pinning when .digest is set; otherwise tag.
 Digest pinning protects against tag mutation (key for supply-chain integrity

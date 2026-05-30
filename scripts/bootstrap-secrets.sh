@@ -10,6 +10,7 @@
 # Usage:
 #   bootstrap-secrets.sh [--namespace NS] [--release RELEASE] [--force]
 #                        [--kubeconfig PATH] [--cloudflare-token TOKEN]
+#                        [--whiteboard]
 #
 # Defaults:
 #   --namespace nextcloud
@@ -19,6 +20,7 @@
 #   <release>-admin       keys: admin-user, admin-password
 #   <release>-postgres    keys: nextcloud-db-password
 #   <release>-valkey      keys: valkey-password, valkey.conf
+#   <release>-whiteboard  keys: jwt-secret-key, redis-url   (only with --whiteboard)
 #   <release>-cloudflared key:  tunnel-token   (only with --cloudflare-token)
 #
 # Admin password is printed once at the end — save it in your password manager.
@@ -29,6 +31,7 @@ NAMESPACE="nextcloud"
 RELEASE="nextcloud-stack"
 FORCE=0
 CF_TOKEN=""
+WB=0
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 while [[ $# -gt 0 ]]; do
@@ -37,6 +40,7 @@ while [[ $# -gt 0 ]]; do
     -r|--release)   RELEASE="$2"; shift 2 ;;
     --force)        FORCE=1; shift ;;
     --cloudflare-token) CF_TOKEN="$2"; shift 2 ;;
+    --whiteboard)   WB=1; shift ;;
     --kubeconfig)   export KUBECONFIG="$2"; shift 2 ;;
     -h|--help)
       sed -n '1,/^set -euo/p' "$0" | sed '$d'
@@ -91,6 +95,7 @@ ensure_ns
 ADMIN_PW="$(gen_pw 32)"
 PG_PW="$(gen_pw 32)"
 VALKEY_PW="$(gen_pw 32)"
+WB_JWT="$(gen_pw 48)"
 
 # Valkey config with requirepass baked in. Mirror of templates/valkey/secret.yaml
 # (the chart no longer renders that template — see SECRET note in values.yaml).
@@ -131,6 +136,21 @@ create_or_skip "${RELEASE}-postgres" \
 create_or_skip "${RELEASE}-valkey" \
   --from-file=valkey-password="$TMP/valkey-password" \
   --from-file=valkey.conf="$TMP/valkey.conf"
+
+# Whiteboard (optional) — consumed by whiteboard.auth.existingSecret.
+# jwt-secret-key is shared with Nextcloud (the db-migrate Job sets it via occ).
+# redis-url embeds the EFFECTIVE valkey password (the one actually in the Secret,
+# not a freshly-generated one — matters on a non-force re-run where valkey is skipped).
+if [[ "$WB" -eq 1 ]]; then
+  VALKEY_PW_EFF=$(kubectl -n "$NAMESPACE" get secret "${RELEASE}-valkey" \
+    -o jsonpath='{.data.valkey-password}' 2>/dev/null | base64 -d || true)
+  VALKEY_PW_EFF="${VALKEY_PW_EFF:-$VALKEY_PW}"
+  printf "%s" "$WB_JWT" > "$TMP/jwt-secret-key"
+  printf "redis://:%s@%s-valkey:6379/1" "$VALKEY_PW_EFF" "$RELEASE" > "$TMP/redis-url"
+  create_or_skip "${RELEASE}-whiteboard" \
+    --from-file=jwt-secret-key="$TMP/jwt-secret-key" \
+    --from-file=redis-url="$TMP/redis-url"
+fi
 
 # Cloudflare tunnel token (optional) — consumed by cloudflare.tunnel.existingSecret.
 if [[ -n "$CF_TOKEN" ]]; then
