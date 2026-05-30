@@ -127,6 +127,13 @@ spec:
             - name: REDIS_HOST_PASSWORD
               valueFrom: { secretKeyRef: { name: {{ $valkeySecret }}, key: valkey-password } }
 {{- end }}
+{{- if .Values.whiteboard.enabled }}
+            # Shared JWT for the Whiteboard backend. Not consumed by fpm itself —
+            # the db-migrate Job reads it from this pod's env to run
+            # `occ config:app:set whiteboard jwt_secret_key`.
+            - name: WHITEBOARD_JWT_SECRET
+              valueFrom: { secretKeyRef: { name: {{ .Values.whiteboard.auth.existingSecret }}, key: jwt-secret-key } }
+{{- end }}
           ports:
             - name: fpm
               containerPort: 9000

@@ -400,6 +400,97 @@ clamav:
     port: 3310
 
 # -----------------------------------------------------------------------------
+# Whiteboard (optional; disabled by default)
+#
+# Nextcloud Whiteboard's websocket backend (Node.js Socket.IO). There is NO DHI
+# image — this uses the public GHCR release image (the documented exception to
+# DHI-by-default, like cloudflared). Restricted-PSS compatible (nobody/65532-ish
+# UID 65534, readOnlyRootFilesystem). HA via the chart's Valkey.
+#
+# Requires Nextcloud-side wiring (the db-migrate Job does this automatically when
+# enabled): installs the `whiteboard` app, sets jwt_secret_key + collabBackendUrl.
+# The shared JWT lives in the external Secret below.
+# -----------------------------------------------------------------------------
+whiteboard:
+  enabled: false
+  image:
+    registry: ghcr.io
+    repository: nextcloud-releases/whiteboard
+    tag: "v1.5.3"
+    # Pin via scripts/pin-digests.sh (overrides tag when set).
+    digest: ""
+    pullPolicy: IfNotPresent
+
+  # HA needs replicas >= 2 AND a shared backend (storageStrategy: redis +
+  # valkey.enabled). The chart FAILS RENDER if replicas > 1 without redis state.
+  replicas: 2
+
+  # Live board-state backend shared across replicas:
+  #   redis -> Socket.IO Redis-Streams adapter on the chart's Valkey (HA).
+  #   lww   -> in-memory, single instance only (use replicas: 1).
+  storageStrategy: redis
+
+  # Public Nextcloud URL the backend calls back to (JWT verification / API).
+  nextcloudUrl: https://nextcloud.example.com
+
+  # Public URL where BROWSERS reach this whiteboard backend (set as the
+  # `collabBackendUrl` on the Nextcloud whiteboard app). You expose the
+  # whiteboard Service yourself (Ingress / Gateway API / Cloudflare), exactly
+  # like Nextcloud — the chart does not auto-expose it. Empty ⇒ the db-migrate
+  # Job skips setting collabBackendUrl (configure it later in the admin UI).
+  publicUrl: ""
+
+  # External Secret (created by scripts/bootstrap-secrets.sh).
+  # Keys: jwt-secret-key (shared with Nextcloud), redis-url (full
+  # redis://:<pw>@<release>-valkey:6379/1 — kept out of any ConfigMap).
+  auth:
+    existingSecret: ""    # REQUIRED when enabled
+
+  # Server-side recording exports the board via a bundled Chromium launched with
+  # --no-sandbox. With no gVisor/Kata sandbox runtime that is unsafe, so it is
+  # OFF and intentionally hard to enable. Leave false unless you've sandboxed it.
+  recording:
+    enabled: false
+
+  service:
+    port: 3002
+
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits:   { cpu: 500m, memory: 512Mi }
+
+  # nobody (ghcr.io/nextcloud-releases/whiteboard). Restricted-PSS clean.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
+    fsGroup: 65534
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true    # works with HOME=/tmp (see deployment)
+    runAsNonRoot: true
+    runAsUser: 65534
+    capabilities:
+      drop: ["ALL"]
+    seccompProfile:
+      type: RuntimeDefault
+
+  pdb:
+    enabled: true
+    minAvailable: 1
+
+  # Spread replicas across nodes. ScheduleAnyway so a small cluster won't wedge.
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: ScheduleAnyway
+
+  podAnnotations: {}
+  podLabels: {}
+
+# -----------------------------------------------------------------------------
 # Ingress (disabled by default)
 #
 # Standard networking.k8s.io/v1 Ingress. Enable and set host + ingressClassName.
@@ -526,6 +617,12 @@ networkPolicy:
   #       matchLabels:
   #         kubernetes.io/metadata.name: envoy-gateway-system
   nextcloudIngressFrom: []
+
+  # Who may reach the Whiteboard backend (port 3002). Browsers connect directly
+  # through the same proxy as Nextcloud, so this defaults to nextcloudIngressFrom
+  # when left empty. Same Cilium-gateway caveat as nextcloudIngressFrom: pair with
+  # a CiliumNetworkPolicy fromEntities:[ingress] when fronting via the Cilium gateway.
+  whiteboardIngressFrom: []
 
   # CIDRs treated as "in-cluster" by the public-egress `except` block. Egress to
   # anything inside these CIDRs must go through the explicit per-Service rules,

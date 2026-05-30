@@ -134,6 +134,16 @@ spec:
         - port: {{ .Values.clamav.service.port }}
           protocol: TCP
     {{- end }}
+    # Whiteboard backend (server-side calls from the whiteboard app)
+    {{- if .Values.whiteboard.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "nextcloud-stack.whiteboard.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: {{ .Values.whiteboard.service.port }}
+          protocol: TCP
+    {{- end }}
     {{- if .Values.networkPolicy.allowAllEgress }}
     # Public internet (app updates, federation, etc.). Lock down by setting
     # networkPolicy.allowAllEgress: false. The `except` block keeps in-cluster
@@ -207,6 +217,16 @@ spec:
       ports:
         - port: {{ .Values.valkey.service.port }}
           protocol: TCP
+    {{- if .Values.whiteboard.enabled }}
+    # Whiteboard's Socket.IO Redis-Streams adapter (shared HA board state).
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "nextcloud-stack.whiteboard.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: {{ .Values.valkey.service.port }}
+          protocol: TCP
+    {{- end }}
   # No egress rules — Valkey is daemon-only. See postgres policy comment.
 {{- end }}
 
@@ -260,6 +280,96 @@ spec:
           protocol: TCP
         - port: 80
           protocol: TCP
+{{- end }}
+
+---
+# ---- Whiteboard: ingress from proxy/Nextcloud; egress to DNS+Nextcloud+Valkey -
+{{- if .Values.whiteboard.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "nextcloud-stack.whiteboard.fullname" . }}
+  labels:
+    {{- include "nextcloud-stack.whiteboard.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "nextcloud-stack.whiteboard.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Browsers reach the whiteboard backend directly through the same proxy as
+    # Nextcloud, so reuse whiteboardIngressFrom (defaults to nextcloudIngressFrom).
+    # NOTE: with the Cilium Gateway/Ingress this is NOT enough on its own — the
+    # gateway's proxied traffic uses the reserved 'ingress' identity, which v1
+    # NetworkPolicy can't select. Pair with a CiliumNetworkPolicy fromEntities:
+    # [ingress] (see README) when fronting via the Cilium gateway.
+{{- range (.Values.networkPolicy.whiteboardIngressFrom | default .Values.networkPolicy.nextcloudIngressFrom) }}
+    - from:
+        {{- toYaml (list .) | nindent 8 }}
+      ports:
+        - port: {{ $.Values.whiteboard.service.port }}
+          protocol: TCP
+{{- end }}
+{{- if .Values.cloudflare.enabled }}
+    - from:
+  {{- if .Values.cloudflare.tunnel.enabled }}
+        - podSelector:
+            matchLabels:
+              {{- include "nextcloud-stack.cloudflared.selectorLabels" . | nindent 14 }}
+  {{- else }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.cloudflare.externalTunnel.namespace }}
+          podSelector:
+            matchLabels:
+              {{ .Values.cloudflare.externalTunnel.podLabel.key }}: {{ .Values.cloudflare.externalTunnel.podLabel.value }}
+  {{- end }}
+      ports:
+        - port: {{ .Values.whiteboard.service.port }}
+          protocol: TCP
+{{- end }}
+    # Nextcloud server-side calls to the backend.
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "nextcloud-stack.nextcloud.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: {{ .Values.whiteboard.service.port }}
+          protocol: TCP
+  egress:
+    # DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # Nextcloud (JWT verification / API)
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "nextcloud-stack.nextcloud.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: {{ .Values.nextcloud.service.targetPort }}
+          protocol: TCP
+    {{- if .Values.valkey.enabled }}
+    # Valkey (shared HA board state)
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "nextcloud-stack.valkey.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: {{ .Values.valkey.service.port }}
+          protocol: TCP
+    {{- end }}
 {{- end }}
 
 ---

@@ -3,10 +3,15 @@ values.local.yaml
 *.local.yaml
 *-secrets.yaml
 secrets/
+# Local cluster-specific deploy overlays + digest pins (never commit)
+test-deploy-values.yaml
+gateway-test-values.yaml
+pins.yaml
 
 # Env files — never commit
 .env
 .env.*
+kubeconfig.yaml
 
 # Helm packaging artifacts
 charts/
