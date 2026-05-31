@@ -284,15 +284,33 @@ kubectl -n <ns> scale deploy/nextcloud-stack --replicas=1
 
 ## Backups
 
-The chart configures no backups (a backup nobody tests is worse than none) — but
-**don't skip this**. Minimums to script outside the chart:
+Set `backup.enabled: true` for a built-in CronJob that, on each run, writes two
+artifacts to a PVC:
 
-```bash
-# Postgres logical dump.
-kubectl -n <ns> exec <rel>-postgres-0 -- pg_dumpall -U <user> > nextcloud-pg-$(date +%F).sql
-# Data PVC snapshot (CSI VolumeSnapshot), if your storage supports it.
+- `postgres/pg-<TS>.sql.gz` — `pg_dumpall` of the whole cluster.
+- `nextcloud/files-<TS>.tar.gz` — `data/` + `config/` (which carries the
+  `config.php` secrets the DB dump is keyed against).
+
+It `kubectl exec`s into the live Pods rather than mounting the RWO PVCs, so it
+never multi-attaches. It runs as a non-root, restricted-PSS Pod with a minimal
+ServiceAccount (`pods/exec` only) and its own CiliumNetworkPolicy. Old archives
+are pruned past `backup.retentionDays`.
+
+```yaml
+backup:
+  enabled: true
+  schedule: "30 2 * * *"
+  retentionDays: 14
+  persistence:
+    existingClaim: nextcloud-backups   # an off-cluster NFS-backed PVC, for real DR
 ```
-Pick one (Velero, Stash, CronJob+rclone) and restore-test it quarterly.
+
+Point `backup.persistence` at storage on a **different failure domain** than the
+cluster (e.g. an NFS export) — a backup on the same disks it protects isn't one.
+
+**Restoring:** see **[docs/restore.md](docs/restore.md)** — a proven, copy-pasteable
+back-up → wipe → restore procedure. Run its verification drill (§9) quarterly; a
+backup nobody restore-tests is worse than none.
 
 ## Secret rotation
 

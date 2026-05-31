@@ -27,10 +27,12 @@ if [ "${PG_ENABLED:-true}" = "true" ]; then
 fi
 
 # ---- Nextcloud data + config (live tar; tar rc 1 = file changed, tolerated) --
+# Exclude lost+found: it's the root-owned ext4 volume-root artifact, not app data,
+# and restoring it trips a harmless-but-noisy "Cannot change mode" chmod error.
 echo "[$(date -u)] nextcloud data/config tar -> files-$TS.tar.gz"
 rc=0
 kubectl exec -n "$BACKUP_NS" "deploy/$NC_DEPLOY" -c php -- \
-  tar czf - --ignore-failed-read -C /var/www/html data config \
+  tar czf - --ignore-failed-read --exclude='lost+found' -C /var/www/html data config \
   > "$NCDIR/files-$TS.tar.gz.tmp" || rc=$?
 if [ "$rc" -le 1 ] && [ -s "$NCDIR/files-$TS.tar.gz.tmp" ]; then
   mv "$NCDIR/files-$TS.tar.gz.tmp" "$NCDIR/files-$TS.tar.gz"
