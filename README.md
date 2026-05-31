@@ -10,6 +10,15 @@ subscription? A one-line overlay (`-f values-public.yaml`) swaps in public Docke
 Hub images. Expose Nextcloud through your choice of **Ingress**, **Gateway API**,
 or the optional **Cloudflare tunnel addon**.
 
+> 📖 **New here? Read the [full documentation wiki in `docs/`](docs/README.md)** —
+> a friendly, task-oriented guide: [Getting Started](docs/getting-started.md),
+> [Installation](docs/installation.md), [Configuration](docs/configuration.md),
+> [Exposure & TLS](docs/exposure-and-tls.md), [Security](docs/security.md),
+> [Storage & Scaling](docs/storage-and-scaling.md),
+> [Backup & Restore](docs/backup-and-restore.md), [Monitoring](docs/monitoring.md),
+> [Operations](docs/operations.md), [Troubleshooting](docs/troubleshooting.md), and
+> the [FAQ](docs/faq.md). This README is the quick reference.
+
 ## What's in it
 
 | Component | Default image (DHI) | Notes |
