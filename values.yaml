@@ -601,42 +601,33 @@ cloudflare:
 # NetworkPolicy (publicly-exposed install ⇒ on by default)
 # -----------------------------------------------------------------------------
 networkPolicy:
+  # Renders CiliumNetworkPolicy (cilium.io/v2). REQUIRES Cilium — the Gateway API
+  # path allows the gateway via fromEntities:[ingress], which standard
+  # NetworkPolicy v1 cannot express. On another CNI set this to false and bring
+  # your own policy. See README "Network policy (Cilium)".
   enabled: true
-  # Who may reach the Nextcloud Service on the HTTP port. A list of raw
-  # NetworkPolicyPeer entries (namespaceSelector / podSelector / ipBlock). Set
-  # this to your ingress controller or gateway. The Cloudflare addon adds its own
-  # source automatically when cloudflare.enabled. Empty + no Cloudflare ⇒ the Pod
-  # accepts no external ingress (safe default until you pick an exposure method).
+
+  # Extra sources allowed to reach Nextcloud on the HTTP port, as raw Cilium
+  # ingress selectors (fromEndpoints / fromEntities / fromCIDRSet). The Cilium
+  # gateway proxy is allowed AUTOMATICALLY when gatewayApi.enabled, and the
+  # Cloudflare addon adds its own source — so this is only for OTHER fronts (e.g.
+  # a separate ingress controller). Empty ⇒ no extra sources.
   #
-  # Example — ingress-nginx:
-  #   - namespaceSelector:
-  #       matchLabels:
-  #         kubernetes.io/metadata.name: ingress-nginx
-  # Example — Envoy Gateway:
-  #   - namespaceSelector:
-  #       matchLabels:
-  #         kubernetes.io/metadata.name: envoy-gateway-system
+  # Example — an ingress-nginx controller's namespace:
+  #   - fromEndpoints:
+  #       - matchLabels:
+  #           k8s:io.kubernetes.pod.namespace: ingress-nginx
   nextcloudIngressFrom: []
 
-  # Who may reach the Whiteboard backend (port 3002). Browsers connect directly
-  # through the same proxy as Nextcloud, so this defaults to nextcloudIngressFrom
-  # when left empty. Same Cilium-gateway caveat as nextcloudIngressFrom: pair with
-  # a CiliumNetworkPolicy fromEntities:[ingress] when fronting via the Cilium gateway.
+  # Same, for the Whiteboard backend (port 3002). Defaults to nextcloudIngressFrom
+  # when empty (browsers reach it through the same front). The Cilium gateway is
+  # allowed automatically when gatewayApi.enabled.
   whiteboardIngressFrom: []
 
-  # CIDRs treated as "in-cluster" by the public-egress `except` block. Egress to
-  # anything inside these CIDRs must go through the explicit per-Service rules,
-  # NOT the 0.0.0.0/0 fallback. Defaults to the RFC1918 ranges, which cover the
-  # pod + Service CIDRs of essentially every cluster. Narrow to your exact pod +
-  # Service CIDRs for tighter egress control. Find them with:
-  #   kubectl get nodes -o jsonpath='{.items[*].spec.podCIDR}'
-  #   kubectl cluster-info dump | grep -m1 service-cluster-ip-range
-  inClusterCidrs:
-    - 10.0.0.0/8
-    - 172.16.0.0/12
-    - 192.168.0.0/16
-  # Allow egress to the public internet for app updates, federation, etc.
-  # Set to false to lock down further (Nextcloud may surface errors).
+  # Allow egress to the public internet (app updates, federation, freshclam) via
+  # Cilium's `world` entity — everything OUTSIDE the cluster. In-cluster traffic
+  # stays on the explicit per-Service rules above. Set false to lock down further
+  # (Nextcloud may surface errors). No CIDR list needed: `world` is identity-based.
   allowAllEgress: true
 
 # -----------------------------------------------------------------------------
