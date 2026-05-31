@@ -1,0 +1,72 @@
+{{- if .Values.backup.enabled }}
+{{/*
+Backup CronJob — pg_dumpall + Nextcloud data/config tar to the backup PVC, via
+`kubectl exec` into the live Pods (no RWO multi-attach). Point the PVC's
+storageClassName at off-cluster storage (e.g. an NFS CSI class) for real DR.
+
+No DHI image has kubectl + a shell, so this uses the public alpine/k8s image
+(documented exception, like cloudflared/whiteboard). Needs RBAC-create for its
+Role/RoleBinding (pods/exec) and — with networkPolicy.enabled — a
+CiliumNetworkPolicy allowing egress to the kube-apiserver.
+*/}}
+{{- $fullname := include "nextcloud-stack.backup.fullname" . -}}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "nextcloud-stack.backup.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  {{- with .Values.backup.timeZone }}
+  timeZone: {{ . | quote }}
+  {{- end }}
+  startingDeadlineSeconds: 300
+  concurrencyPolicy: {{ .Values.backup.concurrencyPolicy }}
+  successfulJobsHistoryLimit: {{ .Values.backup.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.backup.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: {{ .Values.backup.activeDeadlineSeconds }}
+      template:
+        metadata:
+          labels:
+            {{- include "nextcloud-stack.backup.selectorLabels" . | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          serviceAccountName: {{ $fullname }}
+          {{- include "nextcloud-stack.imagePullSecrets" . | nindent 10 }}
+          securityContext:
+            {{- toYaml .Values.backup.podSecurityContext | nindent 12 }}
+          containers:
+            - name: backup
+              image: {{ include "nextcloud-stack.image" .Values.backup.image }}
+              imagePullPolicy: {{ .Values.backup.image.pullPolicy }}
+              command: ["/bin/sh", "/scripts/backup.sh"]
+              securityContext:
+                {{- toYaml .Values.backup.containerSecurityContext | nindent 16 }}
+              env:
+                - { name: HOME,           value: /tmp }
+                - { name: BACKUP_NS,      value: {{ .Release.Namespace | quote }} }
+                - { name: PG_ENABLED,     value: {{ .Values.postgres.enabled | quote }} }
+                - { name: PG_POD,         value: {{ printf "%s-0" (include "nextcloud-stack.postgres.fullname" .) | quote }} }
+                - { name: NC_DEPLOY,      value: {{ include "nextcloud-stack.nextcloud.fullname" . | quote }} }
+                - { name: RETENTION_DAYS, value: {{ .Values.backup.retentionDays | quote }} }
+              resources:
+                {{- toYaml .Values.backup.resources | nindent 16 }}
+              volumeMounts:
+                - { name: backups, mountPath: /backup }
+                - { name: scripts, mountPath: /scripts, readOnly: true }
+                - { name: tmp,     mountPath: /tmp }
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: {{ .Values.backup.persistence.existingClaim | default $fullname }}
+            - name: scripts
+              configMap:
+                name: {{ $fullname }}
+                defaultMode: 0555
+            - name: tmp
+              emptyDir: { sizeLimit: 512Mi }
+{{- end }}

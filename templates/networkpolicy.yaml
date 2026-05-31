@@ -1,466 +1,372 @@
 {{- if .Values.networkPolicy.enabled }}
 {{/*
-NetworkPolicies — default-deny + per-component allows.
+CiliumNetworkPolicy — default-deny + per-component allows.
 
-Public exposure ⇒ NetworkPolicies are part of the threat model. These restrict
-which pods can talk to which others, preventing a compromised sidecar (or
-operator-bot) in another namespace from reaching the database directly.
+This chart uses CiliumNetworkPolicy (cilium.io/v2), NOT standard NetworkPolicy.
+Rationale: under Cilium's Gateway/Ingress the proxied traffic carries the
+reserved `ingress` identity, which standard NetworkPolicy v1 cannot select — so
+a gateway-fronted install 503s with a v1 policy. Cilium-native policy also lets
+us write `toEntities: [world]` (clean public-internet egress) and `fromEntities:
+[ingress]` (exactly the gateway proxy) instead of CIDR/identity hacks.
 
-The chart assumes Cilium semantics; standard NetworkPolicy v1 syntax is used
-so any conformant CNI (Calico, Cilium, etc.) will enforce them.
+REQUIRES Cilium. On another CNI set networkPolicy.enabled=false and bring your
+own policy. See README "Network policy (Cilium)".
+
+`*IngressFrom` values are now raw Cilium ingress selectors (fromEndpoints /
+fromEntities / fromCIDRSet), e.g.
+  nextcloudIngressFrom:
+    - fromEndpoints:
+        - matchLabels: { k8s:io.kubernetes.pod.namespace: ingress-nginx }
 */}}
 
-# ---- default-deny in this namespace -----------------------------------------
-# Excludes the kubectl-using pods (cron, db-migrate). Those need to reach
-# the kube-apiserver, which Cilium classifies as the `kube-apiserver` entity
-# and NetworkPolicy v1 ipBlock rules don't apply to. Their RBAC scope
-# (pods/exec on nextcloud Deployment only) is the actual security constraint.
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
+# ---- catch-all default-deny -------------------------------------------------
+# Selects every pod EXCEPT the kubectl-using Jobs (cron, db-migrate); those
+# reach the kube-apiserver and are constrained by RBAC (pods/exec on the
+# nextcloud Deployment only), not by network policy. Empty ingress + egress
+# arrays select these endpoints for enforcement with ZERO allows = default-deny
+# in both directions; the per-component policies below union in the allows (so
+# this also supplies the egress-deny for the ingress-only component policies).
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
 metadata:
   name: {{ include "nextcloud-stack.fullname" . }}-default-deny
   labels:
     {{- include "nextcloud-stack.labels" . | nindent 4 }}
 spec:
-  podSelector:
+  endpointSelector:
     matchExpressions:
       - key: app.kubernetes.io/component
         operator: NotIn
         values: ["nextcloud-cron", "nextcloud-db-migrate"]
-  policyTypes:
-    - Ingress
-    - Egress
+  ingress: []
+  egress: []
 
 ---
-# ---- Nextcloud: ingress from configured sources, egress to deps + DNS + net --
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
+# ---- Nextcloud: ingress from configured sources + gateway; egress to deps -----
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
 metadata:
   name: {{ include "nextcloud-stack.nextcloud.fullname" . }}
   labels:
     {{- include "nextcloud-stack.nextcloud.labels" . | nindent 4 }}
 spec:
-  podSelector:
+  endpointSelector:
     matchLabels:
       {{- include "nextcloud-stack.nextcloud.selectorLabels" . | nindent 6 }}
-  policyTypes:
-    - Ingress
-    - Egress
   ingress:
-    # Sources allowed to reach Nextcloud on the HTTP port. Populate
-    # networkPolicy.nextcloudIngressFrom with your ingress controller / gateway
-    # (raw NetworkPolicyPeer entries); the Cloudflare addon adds its own source
-    # automatically. `kubectl exec` from the cron/migrate Jobs does NOT need a
-    # rule here — exec traffic goes apiserver -> kubelet -> pod, not through the
-    # Service, and is not constrained by NetworkPolicy on the pod-to-pod path.
+{{- if .Values.gatewayApi.enabled }}
+    # Cilium Gateway / Ingress proxy (reserved `ingress` identity). This is the
+    # rule standard NetworkPolicy can't express.
+    - fromEntities: [ingress]
+      toPorts:
+        - ports: [{ port: {{ .Values.nextcloud.service.targetPort | quote }}, protocol: TCP }]
+{{- end }}
 {{- range .Values.networkPolicy.nextcloudIngressFrom }}
-    - from:
-        {{- toYaml (list .) | nindent 8 }}
-      ports:
-        - port: {{ $.Values.nextcloud.service.targetPort }}
-          protocol: TCP
+    -
+{{ toYaml . | indent 6 }}
+      toPorts:
+        - ports: [{ port: {{ $.Values.nextcloud.service.targetPort | quote }}, protocol: TCP }]
 {{- end }}
 {{- if .Values.cloudflare.enabled }}
-    # Cloudflare addon: allow the cloudflared pods.
-    - from:
-  {{- if .Values.cloudflare.tunnel.enabled }}
-        # cloudflared deployed by this chart (same namespace).
-        - podSelector:
-            matchLabels:
-              {{- include "nextcloud-stack.cloudflared.selectorLabels" . | nindent 14 }}
-  {{- else }}
-        # cloudflared run externally.
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: {{ .Values.cloudflare.externalTunnel.namespace }}
-          podSelector:
-            matchLabels:
-              {{ .Values.cloudflare.externalTunnel.podLabel.key }}: {{ .Values.cloudflare.externalTunnel.podLabel.value }}
-  {{- end }}
-      ports:
-        - port: {{ .Values.nextcloud.service.targetPort }}
-          protocol: TCP
+    # Cloudflare addon: the cloudflared pods.
+{{- if .Values.cloudflare.tunnel.enabled }}
+    - fromEndpoints:
+        - matchLabels:
+            {{- include "nextcloud-stack.cloudflared.selectorLabels" . | nindent 12 }}
+{{- else }}
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: {{ .Values.cloudflare.externalTunnel.namespace }}
+            {{ .Values.cloudflare.externalTunnel.podLabel.key }}: {{ .Values.cloudflare.externalTunnel.podLabel.value }}
+{{- end }}
+      toPorts:
+        - ports: [{ port: {{ .Values.nextcloud.service.targetPort | quote }}, protocol: TCP }]
 {{- end }}
 {{- if .Values.tests.enabled }}
-    # helm-test pod hits /status.php on the Service. Narrow rule on 8080 only.
-    - from:
-        - podSelector:
-            matchLabels:
-              {{- include "nextcloud-stack.selectorLabels" . | nindent 14 }}
-              app.kubernetes.io/component: test
-      ports:
-        - port: {{ .Values.nextcloud.service.targetPort }}
-          protocol: TCP
+    # helm-test pod hits /status.php on the Service.
+    - fromEndpoints:
+        - matchLabels:
+            {{- include "nextcloud-stack.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: test
+      toPorts:
+        - ports: [{ port: {{ .Values.nextcloud.service.targetPort | quote }}, protocol: TCP }]
 {{- end }}
   egress:
     # DNS
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: kube-system
-          podSelector:
-            matchLabels:
-              k8s-app: kube-dns
-      ports:
-        - port: 53
-          protocol: UDP
-        - port: 53
-          protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports: [{ port: "53", protocol: UDP }, { port: "53", protocol: TCP }]
     # Postgres
-    - to:
-        - podSelector:
-            matchLabels:
-              {{- include "nextcloud-stack.postgres.selectorLabels" . | nindent 14 }}
-      ports:
-        - port: {{ .Values.postgres.service.port }}
-          protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            {{- include "nextcloud-stack.postgres.selectorLabels" . | nindent 12 }}
+      toPorts:
+        - ports: [{ port: {{ .Values.postgres.service.port | quote }}, protocol: TCP }]
+{{- if .Values.valkey.enabled }}
     # Valkey
-    {{- if .Values.valkey.enabled }}
-    - to:
-        - podSelector:
-            matchLabels:
-              {{- include "nextcloud-stack.valkey.selectorLabels" . | nindent 14 }}
-      ports:
-        - port: {{ .Values.valkey.service.port }}
-          protocol: TCP
-    {{- end }}
+    - toEndpoints:
+        - matchLabels:
+            {{- include "nextcloud-stack.valkey.selectorLabels" . | nindent 12 }}
+      toPorts:
+        - ports: [{ port: {{ .Values.valkey.service.port | quote }}, protocol: TCP }]
+{{- end }}
+{{- if .Values.clamav.enabled }}
     # ClamAV
-    {{- if .Values.clamav.enabled }}
-    - to:
-        - podSelector:
-            matchLabels:
-              {{- include "nextcloud-stack.clamav.selectorLabels" . | nindent 14 }}
-      ports:
-        - port: {{ .Values.clamav.service.port }}
-          protocol: TCP
-    {{- end }}
+    - toEndpoints:
+        - matchLabels:
+            {{- include "nextcloud-stack.clamav.selectorLabels" . | nindent 12 }}
+      toPorts:
+        - ports: [{ port: {{ .Values.clamav.service.port | quote }}, protocol: TCP }]
+{{- end }}
+{{- if .Values.whiteboard.enabled }}
     # Whiteboard backend (server-side calls from the whiteboard app)
-    {{- if .Values.whiteboard.enabled }}
-    - to:
-        - podSelector:
-            matchLabels:
-              {{- include "nextcloud-stack.whiteboard.selectorLabels" . | nindent 14 }}
-      ports:
-        - port: {{ .Values.whiteboard.service.port }}
-          protocol: TCP
-    {{- end }}
-    {{- if .Values.networkPolicy.allowAllEgress }}
-    # Public internet (app updates, federation, etc.). Lock down by setting
-    # networkPolicy.allowAllEgress: false. The `except` block keeps in-cluster
-    # traffic on the explicit per-Service rules above — see
-    # networkPolicy.inClusterCidrs.
-    - to:
-        - ipBlock:
-            cidr: 0.0.0.0/0
-            except:
-              {{- range .Values.networkPolicy.inClusterCidrs }}
-              - {{ . }}
-              {{- end }}
-      ports:
-        - port: 443
-          protocol: TCP
-        - port: 80
-          protocol: TCP
-    {{- end }}
+    - toEndpoints:
+        - matchLabels:
+            {{- include "nextcloud-stack.whiteboard.selectorLabels" . | nindent 12 }}
+      toPorts:
+        - ports: [{ port: {{ .Values.whiteboard.service.port | quote }}, protocol: TCP }]
+{{- end }}
+{{- if .Values.networkPolicy.allowAllEgress }}
+    # Public internet (app updates, federation, etc.) — everything OUTSIDE the
+    # cluster. `world` is exactly that; in-cluster stays on the rules above.
+    # Lock down by setting networkPolicy.allowAllEgress: false.
+    - toEntities: [world]
+      toPorts:
+        - ports: [{ port: "443", protocol: TCP }, { port: "80", protocol: TCP }]
+{{- end }}
 
 ---
-# ---- Postgres: ingress from Nextcloud only ---------------------------------
+# ---- Postgres: ingress from Nextcloud only (egress denied by catch-all) ------
 {{- if .Values.postgres.enabled }}
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
 metadata:
   name: {{ include "nextcloud-stack.postgres.fullname" . }}
   labels:
     {{- include "nextcloud-stack.postgres.labels" . | nindent 4 }}
 spec:
-  podSelector:
+  endpointSelector:
     matchLabels:
       {{- include "nextcloud-stack.postgres.selectorLabels" . | nindent 6 }}
-  policyTypes:
-    - Ingress
-    - Egress
   ingress:
-    # From the Nextcloud pod.
-    - from:
-        - podSelector:
-            matchLabels:
-              {{- include "nextcloud-stack.nextcloud.selectorLabels" . | nindent 14 }}
-      ports:
-        - port: {{ .Values.postgres.service.port }}
-          protocol: TCP
-  # No egress rules — single-replica postgres doesn't initiate connections.
-  # `Egress` is kept in policyTypes so absence-of-rules means deny-all even
-  # if the default-deny policy is ever removed.
+    - fromEndpoints:
+        - matchLabels:
+            {{- include "nextcloud-stack.nextcloud.selectorLabels" . | nindent 12 }}
+      toPorts:
+        - ports: [{ port: {{ .Values.postgres.service.port | quote }}, protocol: TCP }]
 {{- end }}
 
 ---
-# ---- Valkey: ingress from Nextcloud only -----------------------------------
+# ---- Valkey: ingress from Nextcloud (+ Whiteboard) only ---------------------
 {{- if .Values.valkey.enabled }}
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
 metadata:
   name: {{ include "nextcloud-stack.valkey.fullname" . }}
   labels:
     {{- include "nextcloud-stack.valkey.labels" . | nindent 4 }}
 spec:
-  podSelector:
+  endpointSelector:
     matchLabels:
       {{- include "nextcloud-stack.valkey.selectorLabels" . | nindent 6 }}
-  policyTypes:
-    - Ingress
-    - Egress
   ingress:
-    - from:
-        - podSelector:
-            matchLabels:
-              {{- include "nextcloud-stack.nextcloud.selectorLabels" . | nindent 14 }}
-      ports:
-        - port: {{ .Values.valkey.service.port }}
-          protocol: TCP
-    {{- if .Values.whiteboard.enabled }}
-    # Whiteboard's Socket.IO Redis-Streams adapter (shared HA board state).
-    - from:
-        - podSelector:
-            matchLabels:
-              {{- include "nextcloud-stack.whiteboard.selectorLabels" . | nindent 14 }}
-      ports:
-        - port: {{ .Values.valkey.service.port }}
-          protocol: TCP
-    {{- end }}
-  # No egress rules — Valkey is daemon-only. See postgres policy comment.
+    - fromEndpoints:
+        - matchLabels:
+            {{- include "nextcloud-stack.nextcloud.selectorLabels" . | nindent 12 }}
+{{- if .Values.whiteboard.enabled }}
+        # Whiteboard's Socket.IO Redis-Streams adapter (shared HA board state).
+        - matchLabels:
+            {{- include "nextcloud-stack.whiteboard.selectorLabels" . | nindent 12 }}
+{{- end }}
+      toPorts:
+        - ports: [{ port: {{ .Values.valkey.service.port | quote }}, protocol: TCP }]
 {{- end }}
 
 ---
-# ---- ClamAV: ingress from Nextcloud, egress to internet for freshclam ------
+# ---- ClamAV: ingress from Nextcloud; egress to DNS + freshclam mirrors ------
 {{- if .Values.clamav.enabled }}
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
 metadata:
   name: {{ include "nextcloud-stack.clamav.fullname" . }}
   labels:
     {{- include "nextcloud-stack.clamav.labels" . | nindent 4 }}
 spec:
-  podSelector:
+  endpointSelector:
     matchLabels:
       {{- include "nextcloud-stack.clamav.selectorLabels" . | nindent 6 }}
-  policyTypes:
-    - Ingress
-    - Egress
   ingress:
-    - from:
-        - podSelector:
-            matchLabels:
-              {{- include "nextcloud-stack.nextcloud.selectorLabels" . | nindent 14 }}
-      ports:
-        - port: {{ .Values.clamav.service.port }}
-          protocol: TCP
+    - fromEndpoints:
+        - matchLabels:
+            {{- include "nextcloud-stack.nextcloud.selectorLabels" . | nindent 12 }}
+      toPorts:
+        - ports: [{ port: {{ .Values.clamav.service.port | quote }}, protocol: TCP }]
   egress:
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: kube-system
-          podSelector:
-            matchLabels:
-              k8s-app: kube-dns
-      ports:
-        - port: 53
-          protocol: UDP
-        - port: 53
-          protocol: TCP
-    # freshclam pulls signatures from public mirrors.
-    - to:
-        - ipBlock:
-            cidr: 0.0.0.0/0
-            except:
-              {{- range .Values.networkPolicy.inClusterCidrs }}
-              - {{ . }}
-              {{- end }}
-      ports:
-        - port: 443
-          protocol: TCP
-        - port: 80
-          protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports: [{ port: "53", protocol: UDP }, { port: "53", protocol: TCP }]
+    # freshclam pulls signatures from public mirrors (outside the cluster).
+    - toEntities: [world]
+      toPorts:
+        - ports: [{ port: "443", protocol: TCP }, { port: "80", protocol: TCP }]
 {{- end }}
 
 ---
-# ---- Whiteboard: ingress from proxy/Nextcloud; egress to DNS+Nextcloud+Valkey -
+# ---- Whiteboard: ingress from proxy/Nextcloud; egress DNS+Nextcloud+Valkey --
 {{- if .Values.whiteboard.enabled }}
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
 metadata:
   name: {{ include "nextcloud-stack.whiteboard.fullname" . }}
   labels:
     {{- include "nextcloud-stack.whiteboard.labels" . | nindent 4 }}
 spec:
-  podSelector:
+  endpointSelector:
     matchLabels:
       {{- include "nextcloud-stack.whiteboard.selectorLabels" . | nindent 6 }}
-  policyTypes:
-    - Ingress
-    - Egress
   ingress:
-    # Browsers reach the whiteboard backend directly through the same proxy as
-    # Nextcloud, so reuse whiteboardIngressFrom (defaults to nextcloudIngressFrom).
-    # NOTE: with the Cilium Gateway/Ingress this is NOT enough on its own — the
-    # gateway's proxied traffic uses the reserved 'ingress' identity, which v1
-    # NetworkPolicy can't select. Pair with a CiliumNetworkPolicy fromEntities:
-    # [ingress] (see README) when fronting via the Cilium gateway.
+{{- if .Values.gatewayApi.enabled }}
+    # Browsers reach the whiteboard backend through the Cilium gateway proxy.
+    - fromEntities: [ingress]
+      toPorts:
+        - ports: [{ port: {{ .Values.whiteboard.service.port | quote }}, protocol: TCP }]
+{{- end }}
 {{- range (.Values.networkPolicy.whiteboardIngressFrom | default .Values.networkPolicy.nextcloudIngressFrom) }}
-    - from:
-        {{- toYaml (list .) | nindent 8 }}
-      ports:
-        - port: {{ $.Values.whiteboard.service.port }}
-          protocol: TCP
+    -
+{{ toYaml . | indent 6 }}
+      toPorts:
+        - ports: [{ port: {{ $.Values.whiteboard.service.port | quote }}, protocol: TCP }]
 {{- end }}
 {{- if .Values.cloudflare.enabled }}
-    - from:
-  {{- if .Values.cloudflare.tunnel.enabled }}
-        - podSelector:
-            matchLabels:
-              {{- include "nextcloud-stack.cloudflared.selectorLabels" . | nindent 14 }}
-  {{- else }}
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: {{ .Values.cloudflare.externalTunnel.namespace }}
-          podSelector:
-            matchLabels:
-              {{ .Values.cloudflare.externalTunnel.podLabel.key }}: {{ .Values.cloudflare.externalTunnel.podLabel.value }}
-  {{- end }}
-      ports:
-        - port: {{ .Values.whiteboard.service.port }}
-          protocol: TCP
+{{- if .Values.cloudflare.tunnel.enabled }}
+    - fromEndpoints:
+        - matchLabels:
+            {{- include "nextcloud-stack.cloudflared.selectorLabels" . | nindent 12 }}
+{{- else }}
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: {{ .Values.cloudflare.externalTunnel.namespace }}
+            {{ .Values.cloudflare.externalTunnel.podLabel.key }}: {{ .Values.cloudflare.externalTunnel.podLabel.value }}
+{{- end }}
+      toPorts:
+        - ports: [{ port: {{ .Values.whiteboard.service.port | quote }}, protocol: TCP }]
 {{- end }}
     # Nextcloud server-side calls to the backend.
-    - from:
-        - podSelector:
-            matchLabels:
-              {{- include "nextcloud-stack.nextcloud.selectorLabels" . | nindent 14 }}
-      ports:
-        - port: {{ .Values.whiteboard.service.port }}
-          protocol: TCP
+    - fromEndpoints:
+        - matchLabels:
+            {{- include "nextcloud-stack.nextcloud.selectorLabels" . | nindent 12 }}
+      toPorts:
+        - ports: [{ port: {{ .Values.whiteboard.service.port | quote }}, protocol: TCP }]
   egress:
-    # DNS
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: kube-system
-          podSelector:
-            matchLabels:
-              k8s-app: kube-dns
-      ports:
-        - port: 53
-          protocol: UDP
-        - port: 53
-          protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports: [{ port: "53", protocol: UDP }, { port: "53", protocol: TCP }]
     # Nextcloud (JWT verification / API)
-    - to:
-        - podSelector:
-            matchLabels:
-              {{- include "nextcloud-stack.nextcloud.selectorLabels" . | nindent 14 }}
-      ports:
-        - port: {{ .Values.nextcloud.service.targetPort }}
-          protocol: TCP
-    {{- if .Values.valkey.enabled }}
+    - toEndpoints:
+        - matchLabels:
+            {{- include "nextcloud-stack.nextcloud.selectorLabels" . | nindent 12 }}
+      toPorts:
+        - ports: [{ port: {{ .Values.nextcloud.service.targetPort | quote }}, protocol: TCP }]
+{{- if .Values.valkey.enabled }}
     # Valkey (shared HA board state)
-    - to:
-        - podSelector:
-            matchLabels:
-              {{- include "nextcloud-stack.valkey.selectorLabels" . | nindent 14 }}
-      ports:
-        - port: {{ .Values.valkey.service.port }}
-          protocol: TCP
-    {{- end }}
+    - toEndpoints:
+        - matchLabels:
+            {{- include "nextcloud-stack.valkey.selectorLabels" . | nindent 12 }}
+      toPorts:
+        - ports: [{ port: {{ .Values.valkey.service.port | quote }}, protocol: TCP }]
+{{- end }}
 {{- end }}
 
 ---
-# ---- cloudflared: no ingress, egress to DNS + Nextcloud + Cloudflare edge ---
+# ---- cloudflared: no ingress; egress to DNS + Nextcloud + Cloudflare edge ---
 {{- if and .Values.cloudflare.enabled .Values.cloudflare.tunnel.enabled }}
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
 metadata:
   name: {{ include "nextcloud-stack.cloudflared.fullname" . }}
   labels:
     {{- include "nextcloud-stack.cloudflared.labels" . | nindent 4 }}
 spec:
-  podSelector:
+  endpointSelector:
     matchLabels:
       {{- include "nextcloud-stack.cloudflared.selectorLabels" . | nindent 6 }}
-  policyTypes:
-    - Ingress
-    - Egress
-  # No ingress — cloudflared dials out to the Cloudflare edge.
   egress:
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: kube-system
-          podSelector:
-            matchLabels:
-              k8s-app: kube-dns
-      ports:
-        - { port: 53, protocol: UDP }
-        - { port: 53, protocol: TCP }
-    # The Nextcloud Service (origin).
-    - to:
-        - podSelector:
-            matchLabels:
-              {{- include "nextcloud-stack.nextcloud.selectorLabels" . | nindent 14 }}
-      ports:
-        - port: {{ .Values.nextcloud.service.targetPort }}
-          protocol: TCP
-    # The Cloudflare edge (HTTPS + QUIC on 7844).
-    - to:
-        - ipBlock:
-            cidr: 0.0.0.0/0
-            except:
-              {{- range .Values.networkPolicy.inClusterCidrs }}
-              - {{ . }}
-              {{- end }}
-      ports:
-        - { port: 443,  protocol: TCP }
-        - { port: 7844, protocol: TCP }
-        - { port: 7844, protocol: UDP }
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports: [{ port: "53", protocol: UDP }, { port: "53", protocol: TCP }]
+    # The Nextcloud origin.
+    - toEndpoints:
+        - matchLabels:
+            {{- include "nextcloud-stack.nextcloud.selectorLabels" . | nindent 12 }}
+      toPorts:
+        - ports: [{ port: {{ .Values.nextcloud.service.targetPort | quote }}, protocol: TCP }]
+    # The Cloudflare edge (HTTPS + QUIC on 7844), outside the cluster.
+    - toEntities: [world]
+      toPorts:
+        - ports: [{ port: "443", protocol: TCP }, { port: "7844", protocol: TCP }, { port: "7844", protocol: UDP }]
 {{- end }}
 
 ---
-# ---- helm-test: egress to DNS + Nextcloud Service only ---------------------
-# Sticky policy (not a hook) so `helm test` can be re-run without races. The
-# test Pod itself is a hook with delete-on-success; this NP stays.
+# ---- helm-test: egress to DNS + Nextcloud only -----------------------------
 {{- if .Values.tests.enabled }}
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
 metadata:
   name: {{ include "nextcloud-stack.fullname" . }}-test
   labels:
     {{- include "nextcloud-stack.labels" . | nindent 4 }}
     app.kubernetes.io/component: test
 spec:
-  podSelector:
+  endpointSelector:
     matchLabels:
       {{- include "nextcloud-stack.selectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: test
-  policyTypes:
-    - Ingress
-    - Egress
   egress:
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: kube-system
-          podSelector:
-            matchLabels:
-              k8s-app: kube-dns
-      ports:
-        - port: 53
-          protocol: UDP
-        - port: 53
-          protocol: TCP
-    - to:
-        - podSelector:
-            matchLabels:
-              {{- include "nextcloud-stack.nextcloud.selectorLabels" . | nindent 14 }}
-      ports:
-        - port: {{ .Values.nextcloud.service.targetPort }}
-          protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports: [{ port: "53", protocol: UDP }, { port: "53", protocol: TCP }]
+    - toEndpoints:
+        - matchLabels:
+            {{- include "nextcloud-stack.nextcloud.selectorLabels" . | nindent 12 }}
+      toPorts:
+        - ports: [{ port: {{ .Values.nextcloud.service.targetPort | quote }}, protocol: TCP }]
+{{- end }}
+
+---
+# ---- backup: egress to the kube-apiserver (kubectl exec) + DNS -------------
+{{- if .Values.backup.enabled }}
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "nextcloud-stack.backup.fullname" . }}
+  labels:
+    {{- include "nextcloud-stack.backup.labels" . | nindent 4 }}
+spec:
+  endpointSelector:
+    matchLabels:
+      {{- include "nextcloud-stack.backup.selectorLabels" . | nindent 6 }}
+  egress:
+    - toEntities: [kube-apiserver]
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports: [{ port: "53", protocol: UDP }, { port: "53", protocol: TCP }]
 {{- end }}
 {{- end }}

@@ -1,0 +1,47 @@
+{{- if .Values.backup.enabled }}
+{{/*
+Scoped identity for the backup CronJob: read Pods + exec into them (to run
+pg_dumpall / tar inside the live Pods). Namespace-local, minimum verbs.
+Requires the installer to have RBAC-create permission.
+*/}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "nextcloud-stack.backup.fullname" . }}
+  labels:
+    {{- include "nextcloud-stack.backup.labels" . | nindent 4 }}
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "nextcloud-stack.backup.fullname" . }}
+  labels:
+    {{- include "nextcloud-stack.backup.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  # Resolve `kubectl exec deploy/<nextcloud>` to its Pod.
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "nextcloud-stack.backup.fullname" . }}
+  labels:
+    {{- include "nextcloud-stack.backup.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "nextcloud-stack.backup.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "nextcloud-stack.backup.fullname" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

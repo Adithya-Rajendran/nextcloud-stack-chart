@@ -92,6 +92,23 @@ nextcloud:
     # end-to-end install (not recommended).
     httpsBehindProxy: true
 
+    # Loopback self-connection. Nextcloud's "connect to itself" setup checks
+    # (WebDAV, .well-known, .mjs/.otf, OCS provider, security headers) require the
+    # Pod to HTTP-reach its OWN public URL. Some proxies/CNIs can't hairpin the
+    # backend Pod back to itself through the external entrypoint (e.g. the Cilium
+    # Gateway returns 403 on that self-loop), which makes those checks fail even
+    # though the features work for real clients. When enabled, nginx adds an
+    # internal HTTPS listener on :443 (needs NET_BIND_SERVICE — auto-added to the
+    # web container) using tlsSecret, and a hostAlias points settings.overwriteHost
+    # at 127.0.0.1 so ONLY self-requests resolve to the local nginx. Nothing
+    # external changes (the Service/gateway still use the plain listener).
+    selfConnect:
+      enabled: false
+      # kubernetes.io/tls Secret in THIS namespace, valid for settings.overwriteHost
+      # and trusted by the php image's CA bundle (e.g. a cert-manager Let's Encrypt
+      # cert). REQUIRED when enabled. Assumes settings.overwriteProtocol: https.
+      tlsSecret: ""
+
   replicas: 1
   # Shared RWO PVCs between the fpm + nginx containers (same Pod) ⇒ Recreate;
   # a rolling update would Multi-Attach the volume. Keep Recreate on any RWO SC.
@@ -433,10 +450,12 @@ whiteboard:
   # Public Nextcloud URL the backend calls back to (JWT verification / API).
   nextcloudUrl: https://nextcloud.example.com
 
-  # Public URL where BROWSERS reach this whiteboard backend (set as the
-  # `collabBackendUrl` on the Nextcloud whiteboard app). You expose the
-  # whiteboard Service yourself (Ingress / Gateway API / Cloudflare), exactly
-  # like Nextcloud — the chart does not auto-expose it. Empty ⇒ the db-migrate
+  # Public URL where BROWSERS reach this whiteboard backend, set as the
+  # `collabBackendUrl` on the Nextcloud whiteboard app. RECOMMENDED: use the SAME
+  # URL as Nextcloud (settings.overwriteProtocol://settings.overwriteHost). With
+  # gatewayApi.enabled the chart routes /socket.io/ on that host to the whiteboard
+  # Service, so the collaboration WebSocket is same-origin — no separate
+  # subdomain/cert and no cross-origin browser failures. Empty ⇒ the db-migrate
   # Job skips setting collabBackendUrl (configure it later in the admin UI).
   publicUrl: ""
 
@@ -601,42 +620,33 @@ cloudflare:
 # NetworkPolicy (publicly-exposed install ⇒ on by default)
 # -----------------------------------------------------------------------------
 networkPolicy:
+  # Renders CiliumNetworkPolicy (cilium.io/v2). REQUIRES Cilium — the Gateway API
+  # path allows the gateway via fromEntities:[ingress], which standard
+  # NetworkPolicy v1 cannot express. On another CNI set this to false and bring
+  # your own policy. See README "Network policy (Cilium)".
   enabled: true
-  # Who may reach the Nextcloud Service on the HTTP port. A list of raw
-  # NetworkPolicyPeer entries (namespaceSelector / podSelector / ipBlock). Set
-  # this to your ingress controller or gateway. The Cloudflare addon adds its own
-  # source automatically when cloudflare.enabled. Empty + no Cloudflare ⇒ the Pod
-  # accepts no external ingress (safe default until you pick an exposure method).
+
+  # Extra sources allowed to reach Nextcloud on the HTTP port, as raw Cilium
+  # ingress selectors (fromEndpoints / fromEntities / fromCIDRSet). The Cilium
+  # gateway proxy is allowed AUTOMATICALLY when gatewayApi.enabled, and the
+  # Cloudflare addon adds its own source — so this is only for OTHER fronts (e.g.
+  # a separate ingress controller). Empty ⇒ no extra sources.
   #
-  # Example — ingress-nginx:
-  #   - namespaceSelector:
-  #       matchLabels:
-  #         kubernetes.io/metadata.name: ingress-nginx
-  # Example — Envoy Gateway:
-  #   - namespaceSelector:
-  #       matchLabels:
-  #         kubernetes.io/metadata.name: envoy-gateway-system
+  # Example — an ingress-nginx controller's namespace:
+  #   - fromEndpoints:
+  #       - matchLabels:
+  #           k8s:io.kubernetes.pod.namespace: ingress-nginx
   nextcloudIngressFrom: []
 
-  # Who may reach the Whiteboard backend (port 3002). Browsers connect directly
-  # through the same proxy as Nextcloud, so this defaults to nextcloudIngressFrom
-  # when left empty. Same Cilium-gateway caveat as nextcloudIngressFrom: pair with
-  # a CiliumNetworkPolicy fromEntities:[ingress] when fronting via the Cilium gateway.
+  # Same, for the Whiteboard backend (port 3002). Defaults to nextcloudIngressFrom
+  # when empty (browsers reach it through the same front). The Cilium gateway is
+  # allowed automatically when gatewayApi.enabled.
   whiteboardIngressFrom: []
 
-  # CIDRs treated as "in-cluster" by the public-egress `except` block. Egress to
-  # anything inside these CIDRs must go through the explicit per-Service rules,
-  # NOT the 0.0.0.0/0 fallback. Defaults to the RFC1918 ranges, which cover the
-  # pod + Service CIDRs of essentially every cluster. Narrow to your exact pod +
-  # Service CIDRs for tighter egress control. Find them with:
-  #   kubectl get nodes -o jsonpath='{.items[*].spec.podCIDR}'
-  #   kubectl cluster-info dump | grep -m1 service-cluster-ip-range
-  inClusterCidrs:
-    - 10.0.0.0/8
-    - 172.16.0.0/12
-    - 192.168.0.0/16
-  # Allow egress to the public internet for app updates, federation, etc.
-  # Set to false to lock down further (Nextcloud may surface errors).
+  # Allow egress to the public internet (app updates, federation, freshclam) via
+  # Cilium's `world` entity — everything OUTSIDE the cluster. In-cluster traffic
+  # stays on the explicit per-Service rules above. Set false to lock down further
+  # (Nextcloud may surface errors). No CIDR list needed: `world` is identity-based.
   allowAllEgress: true
 
 # -----------------------------------------------------------------------------
@@ -651,3 +661,62 @@ tests:
     # Pin via scripts/pin-digests.sh (overrides tag when set).
     digest: ""
     pullPolicy: IfNotPresent
+
+# -----------------------------------------------------------------------------
+# Backup (optional; disabled by default)
+#
+# A scheduled CronJob that backs up Postgres (pg_dumpall) and the Nextcloud
+# data + config to a PersistentVolumeClaim. Point persistence.storageClassName
+# at OFF-CLUSTER storage (e.g. an NFS CSI StorageClass with reclaim Retain) for
+# real disaster recovery. It `kubectl exec`s into the live Pods, so it never
+# multi-attaches the RWO PVCs.
+#
+# Needs RBAC-create permission (renders a Role/RoleBinding granting pods/exec)
+# and, with networkPolicy.enabled, a CiliumNetworkPolicy letting the backup Pod
+# reach the kube-apiserver. NO DHI image bundles kubectl + a shell, so this uses
+# the public alpine/k8s image (the documented public-image exception).
+# -----------------------------------------------------------------------------
+backup:
+  enabled: false
+  schedule: "30 2 * * *"          # daily 02:30
+  timeZone: ""                    # IANA tz (K8s 1.27+); empty => cluster default (UTC)
+  retentionDays: 14
+  concurrencyPolicy: Forbid
+  activeDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+
+  image:
+    registry: docker.io
+    repository: alpine/k8s
+    tag: "1.31.7"
+    # Pin via scripts/pin-digests.sh (overrides tag when set).
+    digest: ""
+    pullPolicy: IfNotPresent
+
+  # Backup target. Set storageClassName to off-cluster storage for DR. The PVC
+  # gets resource-policy: keep, so `helm uninstall` never deletes your backups.
+  persistence:
+    size: 100Gi
+    storageClassName: ""
+    accessModes: ["ReadWriteMany"]
+    existingClaim: ""             # use an existing PVC instead of creating one
+
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits:   { cpu: "1",  memory: 512Mi }
+
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
+    seccompProfile:
+      type: RuntimeDefault

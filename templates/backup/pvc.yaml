@@ -1,0 +1,24 @@
+{{- if and .Values.backup.enabled (not .Values.backup.persistence.existingClaim) }}
+{{/*
+Backup target PVC. resource-policy: keep so `helm uninstall` never deletes your
+backups. Point storageClassName at off-cluster storage (e.g. an NFS CSI class
+with reclaim Retain) for disaster recovery that survives the cluster.
+*/}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "nextcloud-stack.backup.fullname" . }}
+  labels:
+    {{- include "nextcloud-stack.backup.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    {{- toYaml .Values.backup.persistence.accessModes | nindent 4 }}
+  {{- with .Values.backup.persistence.storageClassName }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.backup.persistence.size }}
+{{- end }}

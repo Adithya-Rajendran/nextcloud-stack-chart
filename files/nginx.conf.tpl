@@ -87,6 +87,18 @@ http {
     server {
         listen {{ .Values.nextcloud.service.targetPort }};
         listen [::]:{{ .Values.nextcloud.service.targetPort }};
+{{- if .Values.nextcloud.web.selfConnect.enabled }}
+        # Internal HTTPS loopback so the Pod can reach its OWN public URL
+        # (settings.overwriteHost, pinned to 127.0.0.1 via a hostAlias) for the
+        # "connect to itself" setup checks. NOT reachable externally — the
+        # Service/gateway use the plain listener above; this :443 is only hit by
+        # the in-Pod loopback. TLS terminates here with the loopback cert.
+        listen 443 ssl;
+        listen [::]:443 ssl;
+        ssl_certificate     /etc/nginx/selfconnect-tls/tls.crt;
+        ssl_certificate_key /etc/nginx/selfconnect-tls/tls.key;
+        ssl_protocols TLSv1.2 TLSv1.3;
+{{- end }}
         server_name _;
         root /var/www/html;
 
@@ -109,6 +121,10 @@ http {
         add_header X-Frame-Options                   "SAMEORIGIN"        always;
         add_header X-Permitted-Cross-Domain-Policies "none"              always;
         add_header X-Robots-Tag                      "noindex, nofollow" always;
+{{- if .Values.nextcloud.web.httpsBehindProxy }}
+        # HSTS — only meaningful when the site is served over HTTPS (TLS upstream).
+        add_header Strict-Transport-Security "max-age=15552000; includeSubDomains" always;
+{{- end }}
 
         fastcgi_hide_header X-Powered-By;
 
