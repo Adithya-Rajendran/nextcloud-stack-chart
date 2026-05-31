@@ -1,0 +1,25 @@
+{{- if and .Values.metrics.enabled .Values.metrics.serviceMonitor.enabled }}
+{{/*
+Prometheus-Operator ServiceMonitor (optional). Off by default — the reference
+cluster scrapes via a static config. Requires the monitoring.coreos.com/v1 CRDs.
+Add metrics.serviceMonitor.labels to match your Prometheus's serviceMonitorSelector.
+*/}}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "nextcloud-stack.metrics.fullname" . }}
+  labels:
+    {{- include "nextcloud-stack.metrics.labels" . | nindent 4 }}
+    {{- with .Values.metrics.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "nextcloud-stack.metrics.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.metrics.serviceMonitor.interval }}
+      scrapeTimeout: {{ .Values.metrics.serviceMonitor.scrapeTimeout }}
+{{- end }}

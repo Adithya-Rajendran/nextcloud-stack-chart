@@ -147,6 +147,14 @@ spec:
             - name: WHITEBOARD_JWT_SECRET
               valueFrom: { secretKeyRef: { name: {{ .Values.whiteboard.auth.existingSecret }}, key: jwt-secret-key } }
 {{- end }}
+{{- if .Values.metrics.enabled }}
+            # Serverinfo monitoring token. Not consumed by fpm itself — the
+            # db-migrate Job reads it from this pod's env to run
+            # `occ config:app:set serverinfo token` (the exporter sends the same
+            # value as NC-Token).
+            - name: SERVERINFO_TOKEN
+              valueFrom: { secretKeyRef: { name: {{ .Values.metrics.auth.existingSecret }}, key: {{ .Values.metrics.auth.tokenKey }} } }
+{{- end }}
           ports:
             - name: fpm
               containerPort: 9000

@@ -10,7 +10,7 @@
 # Usage:
 #   bootstrap-secrets.sh [--namespace NS] [--release RELEASE] [--force]
 #                        [--kubeconfig PATH] [--cloudflare-token TOKEN]
-#                        [--whiteboard]
+#                        [--whiteboard] [--metrics]
 #
 # Defaults:
 #   --namespace nextcloud
@@ -21,6 +21,7 @@
 #   <release>-postgres    keys: nextcloud-db-password
 #   <release>-valkey      keys: valkey-password, valkey.conf
 #   <release>-whiteboard  keys: jwt-secret-key, redis-url   (only with --whiteboard)
+#   <release>-metrics     key:  token   (only with --metrics)
 #   <release>-cloudflared key:  tunnel-token   (only with --cloudflare-token)
 #
 # Admin password is printed once at the end — save it in your password manager.
@@ -32,6 +33,7 @@ RELEASE="nextcloud-stack"
 FORCE=0
 CF_TOKEN=""
 WB=0
+MET=0
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 while [[ $# -gt 0 ]]; do
@@ -41,6 +43,7 @@ while [[ $# -gt 0 ]]; do
     --force)        FORCE=1; shift ;;
     --cloudflare-token) CF_TOKEN="$2"; shift 2 ;;
     --whiteboard)   WB=1; shift ;;
+    --metrics)      MET=1; shift ;;
     --kubeconfig)   export KUBECONFIG="$2"; shift 2 ;;
     -h|--help)
       sed -n '1,/^set -euo/p' "$0" | sed '$d'
@@ -96,6 +99,7 @@ ADMIN_PW="$(gen_pw 32)"
 PG_PW="$(gen_pw 32)"
 VALKEY_PW="$(gen_pw 32)"
 WB_JWT="$(gen_pw 48)"
+MET_TOKEN="$(gen_pw 48)"
 
 # Valkey config with requirepass baked in. Mirror of templates/valkey/secret.yaml
 # (the chart no longer renders that template — see SECRET note in values.yaml).
@@ -150,6 +154,15 @@ if [[ "$WB" -eq 1 ]]; then
   create_or_skip "${RELEASE}-whiteboard" \
     --from-file=jwt-secret-key="$TMP/jwt-secret-key" \
     --from-file=redis-url="$TMP/redis-url"
+fi
+
+# Metrics serverinfo token (optional) — consumed by metrics.auth.existingSecret.
+# The exporter sends it as NC-Token; the db-migrate Job writes the SAME value
+# into Nextcloud via `occ config:app:set serverinfo token`.
+if [[ "$MET" -eq 1 ]]; then
+  printf "%s" "$MET_TOKEN" > "$TMP/token"
+  create_or_skip "${RELEASE}-metrics" \
+    --from-file=token="$TMP/token"
 fi
 
 # Cloudflare tunnel token (optional) — consumed by cloudflare.tunnel.existingSecret.

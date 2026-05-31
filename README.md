@@ -312,6 +312,51 @@ cluster (e.g. an NFS export) — a backup on the same disks it protects isn't on
 back-up → wipe → restore procedure. Run its verification drill (§9) quarterly; a
 backup nobody restore-tests is worse than none.
 
+## Monitoring (Prometheus / Grafana)
+
+Set `metrics.enabled: true` to run a Prometheus exporter
+([`nextcloud-exporter`](https://github.com/xperimental/nextcloud-exporter)) that
+scrapes Nextcloud's `serverinfo` API and re-exposes metrics on `:9205` (Nextcloud
+has no endpoint Prometheus can scrape directly). It authenticates with the
+`serverinfo` **token** — read-only, no user account; the db-migrate Job writes the
+same token into Nextcloud via `occ config:app:set serverinfo token`. No DHI image
+exists, so it runs the community image hardened restricted-PSS clean (like
+Whiteboard). Pre-create the Secret:
+
+```bash
+scripts/bootstrap-secrets.sh --metrics      # adds <release>-metrics (key: token)
+```
+
+```yaml
+metrics:
+  enabled: true
+  auth:
+    existingSecret: nextcloud-stack-metrics
+networkPolicy:
+  metricsIngressFrom:                         # let your Prometheus reach :9205
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: observability
+```
+
+**Scraping it.** With the Prometheus Operator, set `metrics.serviceMonitor.enabled:
+true` (+ `labels` to match your Prometheus's selector). Otherwise add a static
+target for `<release>-metrics.<namespace>.svc.cluster.local:9205`:
+
+```yaml
+  - job_name: nextcloud
+    static_configs:
+      - targets: ['nextcloud-stack-metrics.nextcloud.svc.cluster.local:9205']
+```
+
+**Grafana.** Import [`dashboards/nextcloud.json`](dashboards/nextcloud.json)
+(uid `nextcloud`) — status, users, files, active users, free space, DB size,
+shares, and system/PHP/DB info, against a `prometheus`-uid datasource.
+
+> Health probes use `tcpSocket`, **not** `httpGet /metrics`: every `/metrics`
+> request triggers an upstream serverinfo scrape, so HTTP probes would generate
+> load and can trip Nextcloud's brute-force throttling.
+
 ## Secret rotation
 
 External Secrets ⇒ operator-driven.

@@ -643,6 +643,17 @@ networkPolicy:
   # allowed automatically when gatewayApi.enabled.
   whiteboardIngressFrom: []
 
+  # Sources allowed to scrape the metrics exporter (port 9205), as raw Cilium
+  # ingress selectors — typically your Prometheus namespace. REQUIRED for
+  # Prometheus to reach the exporter when metrics.enabled + this policy are both
+  # on; empty ⇒ the default-deny catch-all blocks every scraper.
+  #
+  # Example — a Prometheus in the `observability` namespace:
+  #   - fromEndpoints:
+  #       - matchLabels:
+  #           k8s:io.kubernetes.pod.namespace: observability
+  metricsIngressFrom: []
+
   # Allow egress to the public internet (app updates, federation, freshclam) via
   # Cilium's `world` entity — everything OUTSIDE the cluster. In-cluster traffic
   # stays on the explicit per-Service rules above. Set false to lock down further
@@ -661,6 +672,85 @@ tests:
     # Pin via scripts/pin-digests.sh (overrides tag when set).
     digest: ""
     pullPolicy: IfNotPresent
+
+# -----------------------------------------------------------------------------
+# Metrics (optional; disabled by default)
+#
+# A Prometheus exporter (xperimental/nextcloud-exporter) that scrapes Nextcloud's
+# serverinfo API and re-exposes metrics on :9205 (Nextcloud has no endpoint
+# Prometheus can scrape directly). Authenticates with the serverinfo token —
+# read-only, no user account; the db-migrate Job writes the SAME token into
+# Nextcloud via `occ config:app:set serverinfo token` (so enable the
+# dbMigrateJob, or set the token yourself). NO DHI image exists — this is the
+# documented public-image exception, hardened restricted-PSS clean.
+#
+# To scrape it: add a Prometheus target for <release>-metrics:9205 and, with
+# networkPolicy.enabled, set networkPolicy.metricsIngressFrom to your Prometheus
+# namespace. A Prometheus-Operator ServiceMonitor is rendered when
+# metrics.serviceMonitor.enabled (requires the monitoring.coreos.com CRDs).
+# -----------------------------------------------------------------------------
+metrics:
+  enabled: false
+
+  image:
+    registry: ghcr.io
+    repository: xperimental/nextcloud-exporter
+    tag: "0.9.1"
+    # Pin via scripts/pin-digests.sh (overrides tag when set).
+    digest: "sha256:3e90a38976516444d05f5f6758e5d572ca559b69ad3005ec4029786e9daf9129"
+    pullPolicy: IfNotPresent
+
+  # URL the exporter uses to reach Nextcloud. Empty ⇒ the in-cluster Service FQDN
+  # (http://<release>.<ns>.svc.cluster.local:<port>). The serverinfo token
+  # endpoint does NOT require this host to be a trusted_domain.
+  nextcloudUrl: ""
+
+  scrapeTimeout: "5s"
+  tlsSkipVerify: false      # only if nextcloudUrl is https with a private CA
+
+  # Serverinfo token (sent as NC-Token). Pre-create the Secret with
+  # scripts/bootstrap-secrets.sh --metrics; the db-migrate Job sets the same
+  # token in Nextcloud. Key defaults to `token`.
+  auth:
+    existingSecret: ""      # REQUIRED when enabled
+    tokenKey: token
+
+  service:
+    port: 9205
+    annotations: {}
+
+  # Optional Prometheus-Operator ServiceMonitor (off by default — this chart's
+  # reference cluster uses a static scrape config instead). Needs the
+  # monitoring.coreos.com/v1 CRDs.
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}              # e.g. { release: kube-prometheus-stack } for selector match
+
+  resources:
+    requests: { cpu: 10m, memory: 32Mi }
+    limits:   { cpu: 100m, memory: 64Mi }
+
+  # nobody. Static Go binary — readOnlyRootFilesystem with no writable volume.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 65534
+    capabilities:
+      drop: ["ALL"]
+    seccompProfile:
+      type: RuntimeDefault
+
+  podAnnotations: {}
+  podLabels: {}
 
 # -----------------------------------------------------------------------------
 # Backup (optional; disabled by default)
