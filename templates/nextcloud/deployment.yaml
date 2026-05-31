@@ -11,6 +11,9 @@ upgrade. Single replica is enforced.
 {{- if and .Values.valkey.enabled .Values.valkey.auth.enabled -}}
 {{- include "nextcloud-stack.requireSecret" (dict "existing" .Values.valkey.auth.existingSecret "section" "valkey.auth") -}}
 {{- end -}}
+{{- if and .Values.nextcloud.web.selfConnect.enabled (not .Values.nextcloud.web.selfConnect.tlsSecret) -}}
+{{- fail "nextcloud.web.selfConnect.enabled requires nextcloud.web.selfConnect.tlsSecret — a kubernetes.io/tls Secret valid for nextcloud.settings.overwriteHost (e.g. a cert-manager Let's Encrypt cert in this namespace)." -}}
+{{- end -}}
 {{- $fullname := include "nextcloud-stack.nextcloud.fullname" . -}}
 {{- $adminSecret := include "nextcloud-stack.secretName" (dict "existing" .Values.nextcloud.admin.existingSecret "default" (printf "%s-admin" (include "nextcloud-stack.fullname" .))) -}}
 {{- $dbSecret := include "nextcloud-stack.secretName" (dict "existing" .Values.postgres.auth.existingSecret "default" (printf "%s-postgres" (include "nextcloud-stack.fullname" .))) -}}
@@ -46,6 +49,16 @@ spec:
         {{- end }}
     spec:
       {{- include "nextcloud-stack.imagePullSecrets" . | nindent 6 }}
+{{- if .Values.nextcloud.web.selfConnect.enabled }}
+      # Pin the public host to loopback so the Pod's "connect to itself" setup
+      # checks reach the in-Pod nginx :443 listener instead of hairpinning the
+      # external gateway (which 403s the backend-to-self loop). Only self-requests
+      # are affected; the gateway still reaches nginx via the Pod IP.
+      hostAliases:
+        - ip: 127.0.0.1
+          hostnames:
+            - {{ .Values.nextcloud.settings.overwriteHost | quote }}
+{{- end }}
       # 120s lets in-flight file uploads finish before SIGKILL. Defaults to
       # 30s, which silently truncates uploads on rolling restarts.
       terminationGracePeriodSeconds: 120
@@ -180,7 +193,14 @@ spec:
           image: {{ include "nextcloud-stack.image" .Values.nextcloud.web.image }}
           imagePullPolicy: {{ .Values.nextcloud.web.image.pullPolicy }}
           securityContext:
-            {{- toYaml .Values.nextcloud.containerSecurityContext.web | nindent 12 }}
+            {{- $webSc := deepCopy .Values.nextcloud.containerSecurityContext.web }}
+            {{- if .Values.nextcloud.web.selfConnect.enabled }}
+            {{- /* loopback nginx binds :443 — restricted PSS permits adding back NET_BIND_SERVICE */}}
+            {{- $caps := $webSc.capabilities | default dict }}
+            {{- $_ := set $caps "add" (list "NET_BIND_SERVICE") }}
+            {{- $_ := set $webSc "capabilities" $caps }}
+            {{- end }}
+            {{- toYaml $webSc | nindent 12 }}
           ports:
             - name: http
               containerPort: {{ .Values.nextcloud.service.targetPort }}
@@ -197,6 +217,11 @@ spec:
               mountPath: /tmp
             - name: nginx-cache
               mountPath: /var/cache/nginx
+{{- if .Values.nextcloud.web.selfConnect.enabled }}
+            - name: selfconnect-tls
+              mountPath: /etc/nginx/selfconnect-tls
+              readOnly: true
+{{- end }}
           startupProbe:
             # /status.php is the most reliable readiness signal (returns
             # installed:true once setup finished).
@@ -249,3 +274,9 @@ spec:
           emptyDir: { sizeLimit: 64Mi }
         - name: nginx-cache
           emptyDir: { sizeLimit: 256Mi }
+{{- if .Values.nextcloud.web.selfConnect.enabled }}
+        - name: selfconnect-tls
+          secret:
+            secretName: {{ .Values.nextcloud.web.selfConnect.tlsSecret }}
+            defaultMode: 0440
+{{- end }}
