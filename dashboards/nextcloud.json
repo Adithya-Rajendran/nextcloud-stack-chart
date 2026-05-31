@@ -1,0 +1,139 @@
+{
+  "uid": "nextcloud",
+  "title": "Nextcloud",
+  "tags": ["nextcloud"],
+  "editable": true,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-24h", "to": "now" },
+  "timezone": "browser",
+  "annotations": { "list": [] },
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "Status",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "nextcloud_up", "refId": "A" } ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "background", "graphMode": "none", "textMode": "auto", "orientation": "auto" },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "mappings": [ { "type": "value", "options": { "0": { "text": "DOWN", "color": "red", "index": 1 }, "1": { "text": "UP", "color": "green", "index": 0 } } } ], "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] } }, "overrides": [] }
+    },
+    {
+      "id": 2, "type": "stat", "title": "Users",
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "nextcloud_users_total", "refId": "A" } ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "area", "textMode": "auto", "orientation": "auto" },
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "blue" }, "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 3, "type": "stat", "title": "Files",
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "nextcloud_files_total", "refId": "A" } ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "area", "textMode": "auto", "orientation": "auto" },
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "purple" }, "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 4, "type": "stat", "title": "Active users (24h)",
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "nextcloud_active_users_daily_total", "refId": "A" } ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "area", "textMode": "auto", "orientation": "auto" },
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "green" }, "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 5, "type": "stat", "title": "Free space",
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "nextcloud_free_space_bytes", "refId": "A" } ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "area", "textMode": "auto", "orientation": "auto" },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "unit": "bytes", "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "yellow", "value": 5368709120 }, { "color": "green", "value": 21474836480 } ] } }, "overrides": [] }
+    },
+    {
+      "id": 6, "type": "stat", "title": "Database size",
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "nextcloud_database_size_bytes", "refId": "A" } ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "area", "textMode": "auto", "orientation": "auto" },
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "orange" }, "unit": "bytes" }, "overrides": [] }
+    },
+    {
+      "id": 7, "type": "timeseries", "title": "Active users",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "nextcloud_active_users_total", "legendFormat": "5 min", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "nextcloud_active_users_hourly_total", "legendFormat": "1 hour", "refId": "B" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "nextcloud_active_users_daily_total", "legendFormat": "24 hours", "refId": "C" }
+      ],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "calcs": [] }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" }, "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 8, "type": "timeseries", "title": "Users & files",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "nextcloud_users_total", "legendFormat": "users", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "nextcloud_files_total", "legendFormat": "files", "refId": "B" }
+      ],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "calcs": [] }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" }, "unit": "short" }, "overrides": [ { "matcher": { "id": "byName", "options": "files" }, "properties": [ { "id": "custom.axisPlacement", "value": "right" } ] } ] }
+    },
+    {
+      "id": 9, "type": "timeseries", "title": "Free space",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "nextcloud_free_space_bytes", "legendFormat": "free", "refId": "A" } ],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "calcs": [] }, "tooltip": { "mode": "single" } },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" }, "unit": "bytes" }, "overrides": [] }
+    },
+    {
+      "id": 10, "type": "timeseries", "title": "Database size",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "nextcloud_database_size_bytes", "legendFormat": "db size", "refId": "A" } ],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "calcs": [] }, "tooltip": { "mode": "single" } },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" }, "unit": "bytes" }, "overrides": [] }
+    },
+    {
+      "id": 11, "type": "timeseries", "title": "Shares by type",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "nextcloud_shares_total", "legendFormat": "{{type}}", "refId": "A" } ],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "calcs": [] }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10, "showPoints": "never", "stacking": { "mode": "normal" } }, "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 12, "type": "timeseries", "title": "Federated shares",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "nextcloud_shares_federated_total", "legendFormat": "{{direction}}", "refId": "A" } ],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "calcs": [] }, "tooltip": { "mode": "multi" } },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" }, "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 13, "type": "table", "title": "System",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "nextcloud_system_info", "instant": true, "format": "table", "range": false, "refId": "A" } ],
+      "options": { "showHeader": true },
+      "transformations": [ { "id": "organize", "options": { "excludeByName": { "Time": true, "Value": true, "__name__": true, "job": true, "instance": true, "app": true } } } ],
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    },
+    {
+      "id": 14, "type": "table", "title": "PHP & database",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "nextcloud_php_info", "instant": true, "format": "table", "range": false, "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "nextcloud_database_info", "instant": true, "format": "table", "range": false, "refId": "B" }
+      ],
+      "options": { "showHeader": true },
+      "transformations": [ { "id": "organize", "options": { "excludeByName": { "Time": true, "Value": true, "__name__": true, "job": true, "instance": true, "app": true } } } ],
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    }
+  ]
+}

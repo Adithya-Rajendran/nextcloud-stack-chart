@@ -183,6 +183,39 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 {{- end -}}
 
+{{- define "nextcloud-stack.metrics.fullname" -}}{{ include "nextcloud-stack.fullname" . }}-metrics{{- end -}}
+
+{{- define "nextcloud-stack.metrics.selectorLabels" -}}
+{{ include "nextcloud-stack.selectorLabels" . }}
+app.kubernetes.io/component: metrics
+{{- end -}}
+
+{{- define "nextcloud-stack.metrics.labels" -}}
+helm.sh/chart: {{ include "nextcloud-stack.chart" . }}
+{{ include "nextcloud-stack.metrics.selectorLabels" . }}
+{{- if .Chart.AppVersion }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- with .Values.commonLabels }}
+{{ toYaml . }}
+{{- end }}
+{{- end -}}
+
+{{/*
+Internal URL the metrics exporter uses to reach Nextcloud's serverinfo API.
+Defaults to the in-cluster Service FQDN (the serverinfo token endpoint does NOT
+require the host to be a trusted_domain, verified empirically). Override with
+metrics.nextcloudUrl.
+*/}}
+{{- define "nextcloud-stack.metrics.nextcloudUrl" -}}
+{{- if .Values.metrics.nextcloudUrl -}}
+{{ .Values.metrics.nextcloudUrl }}
+{{- else -}}
+http://{{ include "nextcloud-stack.nextcloud.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.nextcloud.service.port }}
+{{- end -}}
+{{- end -}}
+
 {{/*
 Image reference. Prefers digest pinning when .digest is set; otherwise tag.
 Digest pinning protects against tag mutation (key for supply-chain integrity

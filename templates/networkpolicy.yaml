@@ -91,6 +91,14 @@ spec:
       toPorts:
         - ports: [{ port: {{ .Values.nextcloud.service.targetPort | quote }}, protocol: TCP }]
 {{- end }}
+{{- if .Values.metrics.enabled }}
+    # Metrics exporter scraping the serverinfo API.
+    - fromEndpoints:
+        - matchLabels:
+            {{- include "nextcloud-stack.metrics.selectorLabels" . | nindent 12 }}
+      toPorts:
+        - ports: [{ port: {{ .Values.nextcloud.service.targetPort | quote }}, protocol: TCP }]
+{{- end }}
   egress:
     # DNS
     - toEndpoints:
@@ -368,5 +376,45 @@ spec:
             k8s-app: kube-dns
       toPorts:
         - ports: [{ port: "53", protocol: UDP }, { port: "53", protocol: TCP }]
+{{- end }}
+
+---
+# ---- metrics exporter: ingress from the scraper(s); egress DNS + Nextcloud ---
+# Ingress sources come from networkPolicy.metricsIngressFrom (raw Cilium
+# selectors — typically the Prometheus namespace). Empty ⇒ no scraper allowed
+# (the default-deny catch-all blocks it); set it so Prometheus can reach :9205.
+{{- if .Values.metrics.enabled }}
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "nextcloud-stack.metrics.fullname" . }}
+  labels:
+    {{- include "nextcloud-stack.metrics.labels" . | nindent 4 }}
+spec:
+  endpointSelector:
+    matchLabels:
+      {{- include "nextcloud-stack.metrics.selectorLabels" . | nindent 6 }}
+{{- with .Values.networkPolicy.metricsIngressFrom }}
+  ingress:
+{{- range . }}
+    -
+{{ toYaml . | indent 6 }}
+      toPorts:
+        - ports: [{ port: {{ $.Values.metrics.service.port | quote }}, protocol: TCP }]
+{{- end }}
+{{- end }}
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports: [{ port: "53", protocol: UDP }, { port: "53", protocol: TCP }]
+    # Nextcloud serverinfo API.
+    - toEndpoints:
+        - matchLabels:
+            {{- include "nextcloud-stack.nextcloud.selectorLabels" . | nindent 12 }}
+      toPorts:
+        - ports: [{ port: {{ .Values.nextcloud.service.targetPort | quote }}, protocol: TCP }]
 {{- end }}
 {{- end }}

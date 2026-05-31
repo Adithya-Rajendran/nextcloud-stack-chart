@@ -1,0 +1,95 @@
+{{- if .Values.metrics.enabled }}
+{{/*
+Prometheus exporter for Nextcloud (xperimental/nextcloud-exporter). Scrapes the
+serverinfo API and re-exposes clean Prometheus metrics on :9205 — Nextcloud has
+no endpoint Prometheus can scrape directly (serverinfo needs custom
+NC-Token/OCS-APIRequest headers a scrape config can't send).
+
+No DHI image exists (documented public-image exception, like whiteboard /
+cloudflared). It's a static Go binary, so it runs restricted-PSS clean:
+nobody/65534, readOnlyRootFilesystem, all caps dropped, no writable volume.
+
+Auth: the serverinfo token (NC-Token). The db-migrate Job sets the SAME token in
+Nextcloud (`occ config:app:set serverinfo token`) from this Secret — read-only,
+no user account. See metrics.auth in values.yaml.
+*/}}
+{{- include "nextcloud-stack.requireSecret" (dict "existing" .Values.metrics.auth.existingSecret "section" "metrics.auth") -}}
+{{- $fullname := include "nextcloud-stack.metrics.fullname" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "nextcloud-stack.metrics.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      {{- include "nextcloud-stack.metrics.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "nextcloud-stack.metrics.selectorLabels" . | nindent 8 }}
+        {{- with .Values.metrics.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.metrics.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- include "nextcloud-stack.imagePullSecrets" . | nindent 6 }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.metrics.podSecurityContext | nindent 8 }}
+      containers:
+        - name: exporter
+          image: {{ include "nextcloud-stack.image" .Values.metrics.image }}
+          imagePullPolicy: {{ .Values.metrics.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.metrics.containerSecurityContext | nindent 12 }}
+          env:
+            - name: NEXTCLOUD_SERVER
+              value: {{ include "nextcloud-stack.metrics.nextcloudUrl" . | quote }}
+            - name: NEXTCLOUD_LISTEN_ADDRESS
+              value: {{ printf ":%v" .Values.metrics.service.port | quote }}
+            - name: NEXTCLOUD_TIMEOUT
+              value: {{ .Values.metrics.scrapeTimeout | quote }}
+            {{- if .Values.metrics.tlsSkipVerify }}
+            - name: NEXTCLOUD_TLS_SKIP_VERIFY
+              value: "true"
+            {{- end }}
+            # Serverinfo token (sent as NC-Token). Same value the db-migrate Job
+            # writes into Nextcloud via `occ config:app:set serverinfo token`.
+            - name: NEXTCLOUD_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.metrics.auth.existingSecret }}
+                  key: {{ .Values.metrics.auth.tokenKey }}
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.metrics.service.port }}
+              protocol: TCP
+          # TCP probes, NOT httpGet /metrics: each /metrics request makes the
+          # exporter call Nextcloud's serverinfo API, so HTTP health checks would
+          # generate scrape load (and trip brute-force throttling on auth issues).
+          startupProbe:
+            tcpSocket: { port: metrics }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            tcpSocket: { port: metrics }
+            periodSeconds: 30
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            tcpSocket: { port: metrics }
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.metrics.resources | nindent 12 }}
+{{- end }}

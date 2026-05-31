@@ -175,6 +175,19 @@ spec:
               echo "NOTE: whiteboard.publicUrl unset — collabBackendUrl not configured; set it in Nextcloud admin settings."
 {{- end }}
 {{- end }}
+{{- if .Values.metrics.enabled }}
+              # ---- Monitoring: serverinfo app + token (idempotent) ----------
+              # serverinfo ships with Nextcloud; ensure it's enabled, then set
+              # the token the exporter authenticates with (NC-Token). Read from
+              # this pod's env (set on the nextcloud Deployment).
+              echo "==> ensuring serverinfo app is enabled"
+              php -f /var/www/html/occ -- app:enable serverinfo -n
+              if [ -n "${SERVERINFO_TOKEN:-}" ]; then
+                php -f /var/www/html/occ -- config:app:set serverinfo token --value="$SERVERINFO_TOKEN" -n
+              else
+                echo "WARNING: SERVERINFO_TOKEN not present in this pod — serverinfo token NOT set" >&2
+              fi
+{{- end }}
 
               echo "db-migrate: OK"
           resources:
