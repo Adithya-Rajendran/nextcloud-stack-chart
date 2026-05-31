@@ -4,7 +4,7 @@
 # Prerequisites:
 #   1. Pre-create the chart's external Secrets:
 #        ./scripts/bootstrap-secrets.sh --namespace nextcloud --release nextcloud-stack
-#   2. Create the dhi.io pull secret (DHI images are a paid subscription):
+#   2. Create the dhi.io pull secret (DHI images need a FREE Docker account):
 #        kubectl -n nextcloud create secret docker-registry dhi-pull \
 #          --docker-server=dhi.io --docker-username=<user> \
 #          --docker-password='<docker-pat>' --docker-email=<email>
@@ -13,7 +13,7 @@
 #   helm install nextcloud-stack . -n nextcloud --create-namespace \
 #       -f example-values.yaml
 #
-# No DHI subscription? Drop the imagePullSecrets below and also pass
+# Prefer plain Docker Hub images? Drop the imagePullSecrets below and also pass
 #   -f values-public.yaml   (public images on Docker Hub, no pull secret)
 #
 # The chart fails template render if any required `existingSecret` is empty.

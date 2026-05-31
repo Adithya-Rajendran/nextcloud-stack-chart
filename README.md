@@ -5,10 +5,19 @@ Pod, Postgres, Valkey, and optional ClamAV — all in templates we own, no
 subcharts, no out-of-chart patches, no re-apply checklist on upgrade.
 
 It's **security-first**: every image defaults to a [Docker Hardened Image](https://www.docker.com/products/hardened-images/)
-(`dhi.io/*`) — minimal, non-root, CVE-scanned. That's the differentiator. No DHI
-subscription? A one-line overlay (`-f values-public.yaml`) swaps in public Docker
+(`dhi.io/*`) — minimal, non-root, CVE-scanned. That's the differentiator. Prefer plain Docker Hub
+images? A one-line overlay (`-f values-public.yaml`) swaps in public Docker
 Hub images. Expose Nextcloud through your choice of **Ingress**, **Gateway API**,
 or the optional **Cloudflare tunnel addon**.
+
+> 📖 **New here? Read the [full documentation wiki in `docs/`](docs/README.md)** —
+> a friendly, task-oriented guide: [Getting Started](docs/getting-started.md),
+> [Installation](docs/installation.md), [Configuration](docs/configuration.md),
+> [Exposure & TLS](docs/exposure-and-tls.md), [Security](docs/security.md),
+> [Storage & Scaling](docs/storage-and-scaling.md),
+> [Backup & Restore](docs/backup-and-restore.md), [Monitoring](docs/monitoring.md),
+> [Operations](docs/operations.md), [Troubleshooting](docs/troubleshooting.md), and
+> the [FAQ](docs/faq.md). This README is the quick reference.
 
 ## What's in it
 
@@ -23,10 +32,11 @@ or the optional **Cloudflare tunnel addon**.
 | `curl` | `dhi.io/curl:8-alpine3.23` | `helm test`. |
 | `cloudflared` | `cloudflare/cloudflared:2024.12.2` | **Only with the Cloudflare addon.** No DHI image exists; upstream distroless, UID 65532. |
 
-> **No Docker Hardened Images subscription?** Pass `-f values-public.yaml` to swap
+> **Prefer plain Docker Hub images?** Pass `-f values-public.yaml` to swap
 > every image for a public Docker Hub equivalent (nginx-unprivileged, postgres,
-> valkey, rancher/kubectl, curlimages/curl). No pull secret needed. DHI is a paid
-> subscription and needs an `imagePullSecret` (see [Install](#install)).
+> valkey, rancher/kubectl, curlimages/curl). No pull secret needed. The DHI images
+> only need a **free** Docker account (no paid subscription) plus an `imagePullSecret`
+> (see [Install](#install)).
 
 ## What's deliberately NOT in it
 
@@ -216,7 +226,7 @@ Run from the chart root (the directory with this README).
 # 1. Pre-create Secrets.
 ./scripts/bootstrap-secrets.sh --namespace nextcloud --release nextcloud-stack
 
-# 2. DHI pull secret (default images live on dhi.io — a paid subscription).
+# 2. DHI pull secret (default images live on dhi.io — a FREE Docker account).
 #    For public images instead: skip this and add `-f values-public.yaml` below.
 kubectl -n nextcloud create secret docker-registry dhi-pull \
     --docker-server=dhi.io --docker-username=<user> \
@@ -236,8 +246,8 @@ helm install nextcloud-stack . \
 helm test nextcloud-stack -n nextcloud
 ```
 
-Drop `-f pins.yaml` to skip digest pinning. For public images (no DHI
-subscription), skip the pull secret and add `-f values-public.yaml` to the
+Drop `-f pins.yaml` to skip digest pinning. To use public Docker Hub images
+instead, skip the pull secret and add `-f values-public.yaml` to the
 `helm template`/`helm install` commands.
 
 ## Upgrade
