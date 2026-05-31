@@ -659,3 +659,62 @@ tests:
     # Pin via scripts/pin-digests.sh (overrides tag when set).
     digest: ""
     pullPolicy: IfNotPresent
+
+# -----------------------------------------------------------------------------
+# Backup (optional; disabled by default)
+#
+# A scheduled CronJob that backs up Postgres (pg_dumpall) and the Nextcloud
+# data + config to a PersistentVolumeClaim. Point persistence.storageClassName
+# at OFF-CLUSTER storage (e.g. an NFS CSI StorageClass with reclaim Retain) for
+# real disaster recovery. It `kubectl exec`s into the live Pods, so it never
+# multi-attaches the RWO PVCs.
+#
+# Needs RBAC-create permission (renders a Role/RoleBinding granting pods/exec)
+# and, with networkPolicy.enabled, a CiliumNetworkPolicy letting the backup Pod
+# reach the kube-apiserver. NO DHI image bundles kubectl + a shell, so this uses
+# the public alpine/k8s image (the documented public-image exception).
+# -----------------------------------------------------------------------------
+backup:
+  enabled: false
+  schedule: "30 2 * * *"          # daily 02:30
+  timeZone: ""                    # IANA tz (K8s 1.27+); empty => cluster default (UTC)
+  retentionDays: 14
+  concurrencyPolicy: Forbid
+  activeDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+
+  image:
+    registry: docker.io
+    repository: alpine/k8s
+    tag: "1.31.7"
+    # Pin via scripts/pin-digests.sh (overrides tag when set).
+    digest: ""
+    pullPolicy: IfNotPresent
+
+  # Backup target. Set storageClassName to off-cluster storage for DR. The PVC
+  # gets resource-policy: keep, so `helm uninstall` never deletes your backups.
+  persistence:
+    size: 100Gi
+    storageClassName: ""
+    accessModes: ["ReadWriteMany"]
+    existingClaim: ""             # use an existing PVC instead of creating one
+
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits:   { cpu: "1",  memory: 512Mi }
+
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
+    seccompProfile:
+      type: RuntimeDefault

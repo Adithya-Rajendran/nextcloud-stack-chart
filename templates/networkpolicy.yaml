@@ -346,4 +346,27 @@ spec:
       toPorts:
         - ports: [{ port: {{ .Values.nextcloud.service.targetPort | quote }}, protocol: TCP }]
 {{- end }}
+
+---
+# ---- backup: egress to the kube-apiserver (kubectl exec) + DNS -------------
+{{- if .Values.backup.enabled }}
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "nextcloud-stack.backup.fullname" . }}
+  labels:
+    {{- include "nextcloud-stack.backup.labels" . | nindent 4 }}
+spec:
+  endpointSelector:
+    matchLabels:
+      {{- include "nextcloud-stack.backup.selectorLabels" . | nindent 6 }}
+  egress:
+    - toEntities: [kube-apiserver]
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports: [{ port: "53", protocol: UDP }, { port: "53", protocol: TCP }]
+{{- end }}
 {{- end }}

@@ -39,6 +39,7 @@ PATHS=(
   .whiteboard.image
   .cloudflare.tunnel.image
   .tests.image
+  .backup.image
 )
 
 OUT=$(mktemp); trap 'rm -f "$OUT"' EXIT
