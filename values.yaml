@@ -450,10 +450,12 @@ whiteboard:
   # Public Nextcloud URL the backend calls back to (JWT verification / API).
   nextcloudUrl: https://nextcloud.example.com
 
-  # Public URL where BROWSERS reach this whiteboard backend (set as the
-  # `collabBackendUrl` on the Nextcloud whiteboard app). You expose the
-  # whiteboard Service yourself (Ingress / Gateway API / Cloudflare), exactly
-  # like Nextcloud — the chart does not auto-expose it. Empty ⇒ the db-migrate
+  # Public URL where BROWSERS reach this whiteboard backend, set as the
+  # `collabBackendUrl` on the Nextcloud whiteboard app. RECOMMENDED: use the SAME
+  # URL as Nextcloud (settings.overwriteProtocol://settings.overwriteHost). With
+  # gatewayApi.enabled the chart routes /socket.io/ on that host to the whiteboard
+  # Service, so the collaboration WebSocket is same-origin — no separate
+  # subdomain/cert and no cross-origin browser failures. Empty ⇒ the db-migrate
   # Job skips setting collabBackendUrl (configure it later in the admin UI).
   publicUrl: ""
 

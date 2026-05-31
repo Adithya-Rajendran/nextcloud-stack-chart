@@ -34,6 +34,19 @@ spec:
     {{- toYaml . | nindent 4 }}
   {{- end }}
   rules:
+{{- if .Values.whiteboard.enabled }}
+    # Whiteboard real-time-collaboration WebSocket, served on the SAME host as
+    # Nextcloud at /socket.io/ (no separate subdomain/cert, no cross-origin — the
+    # browser reuses the host it's already on). Point whiteboard.publicUrl at this
+    # same host. More specific than the "/" rule below, so it wins for /socket.io/.
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /socket.io/
+      backendRefs:
+        - name: {{ include "nextcloud-stack.whiteboard.fullname" . }}
+          port: {{ .Values.whiteboard.service.port }}
+{{- end }}
     - backendRefs:
         - name: {{ include "nextcloud-stack.nextcloud.fullname" . }}
           port: {{ .Values.nextcloud.service.port }}
