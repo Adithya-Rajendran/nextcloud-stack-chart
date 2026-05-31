@@ -1,3 +1,6 @@
+---
+---
+
 # Getting Started
 
 This page gets you from nothing to a working Nextcloud in about ten minutes. For
@@ -15,7 +18,7 @@ You'll need:
   `Chart.yaml`).
 - **A StorageClass** that can provision `ReadWriteOnce` volumes (the default one
   is fine). Check with `kubectl get storageclass`.
-- **One of:** a Docker Hardened Images subscription (default), **or** nothing
+- **One of:** a free Docker account for `dhi.io` (default), **or** nothing
   extra if you use the public-image overlay (see step 4).
 
 Strongly recommended for the security features:
@@ -60,8 +63,8 @@ those add-ons.) Details: [Security › Secrets](security.md#secrets-are-external
 
 ## 4. Pick your image source
 
-**Option A — Docker Hardened Images (default).** Create the pull secret for the
-`dhi.io` subscription registry:
+**Option A — Docker Hardened Images (default).** Create the pull secret for
+`dhi.io` (a free Docker account is enough — no paid subscription):
 
 ```bash
 kubectl -n nextcloud create secret docker-registry dhi-pull \
@@ -69,7 +72,7 @@ kubectl -n nextcloud create secret docker-registry dhi-pull \
   --docker-password='<docker-pat>' --docker-email=<email>
 ```
 
-**Option B — public images (no subscription).** Skip the pull secret and add
+**Option B — public images (Docker Hub).** Skip the pull secret and add
 `-f values-public.yaml` to every `helm` command below.
 
 ---

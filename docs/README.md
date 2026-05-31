@@ -1,3 +1,6 @@
+---
+---
+
 # nextcloud-stack wiki
 
 Welcome! This is the full documentation for **nextcloud-stack** — a security-first
@@ -13,7 +16,7 @@ zero to a running instance. Then come back to this map for the deep dives.
 ## What makes this chart different
 
 - **Hardened by default.** Every image is a [Docker Hardened Image](https://www.docker.com/products/hardened-images/)
-  (`dhi.io/*`) — minimal, non-root, CVE-scanned. No DHI subscription? One overlay
+  (`dhi.io/*`) — minimal, non-root, CVE-scanned. Just a free Docker account to pull. Prefer Docker Hub? One overlay
   (`-f values-public.yaml`) swaps in public Docker Hub images.
 - **Locked down out of the box.** Restricted PodSecurity, a default-deny
   CiliumNetworkPolicy, non-root + read-only-rootfs + dropped capabilities
@@ -63,7 +66,7 @@ zero to a running instance. Then come back to this map for the deep dives.
 
 - **…install for the first time** → [Getting Started](getting-started.md)
 - **…expose it on my domain** → [Exposure & TLS](exposure-and-tls.md)
-- **…run it without a DHI subscription** → [Installation › Public images](installation.md#option-b-public-images-no-subscription)
+- **…use plain Docker Hub images** → [Installation › Public images](installation.md#option-b-public-images-docker-hub)
 - **…make the data volume bigger** → [Storage & Scaling › Expanding a PVC](storage-and-scaling.md#expanding-a-pvc)
 - **…turn on backups** → [Backup & Restore](backup-and-restore.md)
 - **…get metrics into Grafana** → [Monitoring](monitoring.md)
@@ -84,5 +87,5 @@ zero to a running instance. Then come back to this map for the deep dives.
 - Chart version documented here: **0.3.0** (Nextcloud appVersion **33.0.3**).
 
 > This wiki lives in [`docs/`](.) in the repo, so it's versioned and reviewed
-> alongside the chart. The top-level [`README.md`](../README.md) is the quick
+> alongside the chart. The top-level [`README.md`](https://github.com/Adithya-Rajendran/nextcloud-stack-chart/blob/main/README.md) is the quick
 > reference; these pages are the long form.

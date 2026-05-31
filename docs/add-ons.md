@@ -1,3 +1,6 @@
+---
+---
+
 # Add-ons
 
 Optional components beyond the core (Nextcloud + Postgres + Valkey). Each is a

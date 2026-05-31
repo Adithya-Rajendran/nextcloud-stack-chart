@@ -1,10 +1,11 @@
 # nextcloud-stack — default values.
 #
 # Security-first: images default to Docker Hardened Images (DHI, dhi.io) — minimal,
-# non-root, CVE-scanned. DHI is a paid Docker subscription, so the default install
-# needs an imagePullSecret (see imagePullSecrets below).
+# non-root, CVE-scanned. The dhi.io images just need a FREE Docker account (not a
+# paid subscription); the default install authenticates with an imagePullSecret
+# (see imagePullSecrets below).
 #
-# No DHI subscription? Use public images instead with the bundled overlay:
+# Prefer plain Docker Hub images (no dhi.io login)? Use the bundled overlay:
 #   -f values-public.yaml   public images on Docker Hub, no pull secret needed.
 #
 # Most users override a small subset in a `-f my-values.yaml` file. See
@@ -26,8 +27,8 @@ fullnameOverride: ""
 # Common labels added to every resource.
 commonLabels: {}
 
-# Image-pull secrets. The default DHI images live on dhi.io (subscription
-# registry) and need one. Create it and reference it here:
+# Image-pull secrets. The default DHI images live on dhi.io and need one — a FREE
+# Docker account is enough (no paid subscription). Create it and reference it here:
 #   kubectl -n <ns> create secret docker-registry dhi-pull \
 #     --docker-server=dhi.io --docker-username=<user> \
 #     --docker-password='<docker-pat>' --docker-email=<email>

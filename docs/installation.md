@@ -1,3 +1,6 @@
+---
+---
+
 # Installation
 
 The complete install walkthrough, with the reasoning behind each step. For the
@@ -61,7 +64,8 @@ doesn't care how they got there. See [Security › Secrets](security.md#secrets-
 
 ### Option A: Docker Hardened Images (default)
 
-The default images live on `dhi.io`, a paid Docker subscription registry, so the
+The default images live on `dhi.io`, which needs a **free** Docker account (not a
+paid subscription) to pull, so the
 cluster needs credentials to pull them:
 
 ```bash
@@ -81,7 +85,7 @@ imagePullSecrets:
 > Docker-Hub-keyed secret returns `401` against `dhi.io`. (See
 > [Troubleshooting](troubleshooting.md#imagepullbackoff--401-unauthorized-on-dhiio).)
 
-### Option B: public images (no subscription)
+### Option B: public images (Docker Hub)
 
 Add the overlay and skip the pull secret entirely:
 

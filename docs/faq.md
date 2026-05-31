@@ -1,13 +1,17 @@
+---
+---
+
 # FAQ
 
 Quick answers. Most link to the page with the full story.
 
 ---
 
-**Do I need a Docker Hardened Images subscription?**
-No. The default images are DHI (paid), but `-f values-public.yaml` swaps in public
-Docker Hub images with no pull secret. You keep every other security control. See
-[Installation › Public images](installation.md#option-b-public-images-no-subscription).
+**Do I need a paid Docker subscription for the hardened images?**
+No — a **free** Docker account is enough to pull the `dhi.io` images. Or skip
+`dhi.io` entirely: `-f values-public.yaml` swaps in public Docker Hub images with no
+pull secret, keeping every other security control. See
+[Installation › Public images](installation.md#option-b-public-images-docker-hub).
 
 **Do I have to use Cilium?**
 Only if you want the chart's NetworkPolicy. It renders a `CiliumNetworkPolicy`

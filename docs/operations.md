@@ -1,3 +1,6 @@
+---
+---
+
 # Operations (Day 2)
 
 Running the chart after install: upgrades, secret rotation, Postgres major

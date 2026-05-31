@@ -1,3 +1,6 @@
+---
+---
+
 # Security Model
 
 Security is the whole point of this chart. This page explains what's hardened, why,
@@ -27,7 +30,7 @@ non-root, continuously CVE-scanned. The only custom image is the PHP-FPM one
 images as documented exceptions: **whiteboard**, **metrics** (nextcloud-exporter),
 and **cloudflared**.
 
-No DHI subscription? `-f values-public.yaml` swaps in public Docker Hub images.
+Prefer plain Docker Hub images? `-f values-public.yaml` swaps them in (no `dhi.io` login).
 You lose the hardened base but keep every other control below.
 
 > **Pull-secret gotcha:** the DHI pull secret must be keyed to **`dhi.io`**. A

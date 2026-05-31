@@ -1,3 +1,6 @@
+---
+---
+
 # Troubleshooting
 
 Symptoms → causes → fixes. Includes the non-obvious ones learned the hard way.
@@ -34,7 +37,7 @@ kubectl -n nextcloud create secret docker-registry dhi-pull \
   --docker-password='<docker-pat>' --docker-email=<email>
 ```
 
-…and ensure `imagePullSecrets: [{name: dhi-pull}]` is set. No DHI subscription?
+…and ensure `imagePullSecrets: [{name: dhi-pull}]` is set — a **free** Docker account is enough. Prefer plain Docker Hub images?
 Use `-f values-public.yaml` instead.
 
 ### `ImagePullBackOff` on a public image

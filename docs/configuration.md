@@ -1,3 +1,6 @@
+---
+---
+
 # Configuration
 
 How configuration works in this chart, the knobs most people actually touch, and
@@ -20,9 +23,9 @@ Useful bundled files:
 
 | File | Purpose |
 |---|---|
-| [`values.yaml`](../values.yaml) | the defaults + inline docs (the source of truth) |
-| [`example-values.yaml`](../example-values.yaml) | a realistic minimal install behind ingress-nginx |
-| [`values-public.yaml`](../values-public.yaml) | overlay that swaps DHI images for public Docker Hub ones |
+| [`values.yaml`](https://github.com/Adithya-Rajendran/nextcloud-stack-chart/blob/main/values.yaml) | the defaults + inline docs (the source of truth) |
+| [`example-values.yaml`](https://github.com/Adithya-Rajendran/nextcloud-stack-chart/blob/main/example-values.yaml) | a realistic minimal install behind ingress-nginx |
+| [`values-public.yaml`](https://github.com/Adithya-Rajendran/nextcloud-stack-chart/blob/main/values-public.yaml) | overlay that swaps DHI images for public Docker Hub ones |
 
 Keep your own settings in a small `my-values.yaml` overlay — don't edit
 `values.yaml` directly, so chart updates stay clean.
@@ -136,7 +139,7 @@ nextcloud:
 
 ### Behind ingress-nginx (the example)
 
-See [`example-values.yaml`](../example-values.yaml) — Ingress + cert Secret +
+See [`example-values.yaml`](https://github.com/Adithya-Rajendran/nextcloud-stack-chart/blob/main/example-values.yaml) — Ingress + cert Secret +
 `nextcloudIngressFrom` for the controller's namespace.
 
 ### Behind a Cilium Gateway with Whiteboard
@@ -155,7 +158,7 @@ networkPolicy:
   enabled: true                              # gateway auto-allowed
 ```
 
-### Public images, no DHI subscription
+### Public images (Docker Hub)
 
 ```bash
 helm install nextcloud-stack . -n nextcloud -f my-values.yaml -f values-public.yaml
