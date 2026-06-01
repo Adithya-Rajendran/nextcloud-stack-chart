@@ -1,6 +1,3 @@
----
----
-
 # Installation
 
 The complete install walkthrough, with the reasoning behind each step. For the

@@ -1,6 +1,3 @@
----
----
-
 # nextcloud-stack wiki
 
 Welcome! This is the full documentation for **nextcloud-stack** — a security-first
@@ -87,5 +84,5 @@ zero to a running instance. Then come back to this map for the deep dives.
 - Chart version documented here: **0.3.0** (Nextcloud appVersion **33.0.3**).
 
 > This wiki lives in [`docs/`](.) in the repo, so it's versioned and reviewed
-> alongside the chart. The top-level [`README.md`](https://github.com/Adithya-Rajendran/nextcloud-stack-chart/blob/main/README.md) is the quick
+> alongside the chart. The top-level [`README.md`](../README.md) is the quick
 > reference; these pages are the long form.

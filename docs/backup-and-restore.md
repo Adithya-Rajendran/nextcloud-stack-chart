@@ -1,6 +1,3 @@
----
----
-
 # Backup & Restore
 
 The chart ships an optional backup CronJob and a **proven** restore procedure. A

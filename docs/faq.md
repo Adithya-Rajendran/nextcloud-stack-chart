@@ -1,6 +1,3 @@
----
----
-
 # FAQ
 
 Quick answers. Most link to the page with the full story.
