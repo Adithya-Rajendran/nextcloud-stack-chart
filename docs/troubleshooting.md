@@ -23,7 +23,7 @@ migration step yourself — see
 
 ## Images
 
-### `ImagePullBackOff` / `401 Unauthorized` on `dhi.io`
+### `ImagePullBackOff` or `401 Unauthorized` on `dhi.io`
 The DHI pull secret is missing or **keyed to the wrong registry**. The
 `docker-registry` secret must use `--docker-server=dhi.io` — a Docker-Hub-keyed
 secret returns `401` against `dhi.io`. Recreate it:

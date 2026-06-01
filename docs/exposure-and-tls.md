@@ -66,7 +66,7 @@ that plain NetworkPolicy v1 can't express — which is why this chart's policy i
 
 ---
 
-## Option 3 — Cloudflare tunnel addon
+## Option 3: Cloudflare tunnel addon
 
 No public ingress IP? The chart can run `cloudflared` for you and dial out to
 Cloudflare's edge:

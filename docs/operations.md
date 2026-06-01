@@ -51,7 +51,7 @@ db-migrate Job template is the reference for exactly what it does.)
 
 ---
 
-## `occ` — the Nextcloud admin CLI
+## `occ`: the Nextcloud admin CLI
 
 `occ` runs **inside** the php container:
 

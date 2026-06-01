@@ -80,7 +80,7 @@ imagePullSecrets:
 
 > **Heads-up:** the pull secret must be keyed to the **`dhi.io`** registry. A
 > Docker-Hub-keyed secret returns `401` against `dhi.io`. (See
-> [Troubleshooting](troubleshooting.md#imagepullbackoff--401-unauthorized-on-dhiio).)
+> [Troubleshooting](troubleshooting.md#imagepullbackoff-or-401-unauthorized-on-dhiio).)
 
 ### Option B: public images (Docker Hub)
 

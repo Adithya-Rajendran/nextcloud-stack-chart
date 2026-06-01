@@ -58,7 +58,7 @@ Not in place — it needs dump+restore. Procedure in
 
 **Should I run Collabora/Office?**
 Not from this chart — run it separately and connect the `richdocuments` app.
-[Add-ons › Office/Collabora](add-ons.md#office--collabora-not-included).
+[Add-ons › Office/Collabora](add-ons.md#office-and-collabora-not-included).
 
 **Can I turn off ClamAV?**
 Yes — `clamav.enabled: false`. It's heavy (1–3 GiB RAM). See
@@ -66,7 +66,7 @@ Yes — `clamav.enabled: false`. It's heavy (1–3 GiB RAM). See
 
 **How do I change the upload size limit?**
 `nextcloud.settings.maxFileUploadSize`, and match it on your front door (e.g.
-`nginx.ingress.kubernetes.io/proxy-body-size`). See [Configuration](configuration.md#hostname--server-settings).
+`nginx.ingress.kubernetes.io/proxy-body-size`). See [Configuration](configuration.md#hostname-and-server-settings).
 
 **Can I reuse my existing PVCs / migrate from another chart?**
 Yes — `nextcloud.persistence.*.existingClaim`. See
@@ -74,7 +74,7 @@ Yes — `nextcloud.persistence.*.existingClaim`. See
 
 **How do I run `occ` commands?**
 `kubectl -n <ns> exec deploy/<release> -c php -- php occ <command>`. Common ones in
-[Operations › occ](operations.md#occ--the-nextcloud-admin-cli).
+[Operations › occ](operations.md#occ-the-nextcloud-admin-cli).
 
 ---
 
