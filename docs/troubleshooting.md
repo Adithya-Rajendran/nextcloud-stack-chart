@@ -1,6 +1,3 @@
----
----
-
 # Troubleshooting
 
 Symptoms → causes → fixes. Includes the non-obvious ones learned the hard way.

@@ -1,6 +1,3 @@
----
----
-
 # Architecture
 
 A tour of how the chart is put together — useful before you tune it or debug it.

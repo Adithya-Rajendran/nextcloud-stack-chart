@@ -1,6 +1,3 @@
----
----
-
 # Exposure & TLS
 
 How to get traffic to Nextcloud from the outside world. The chart's Service stays

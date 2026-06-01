@@ -1,6 +1,3 @@
----
----
-
 # Security Model
 
 Security is the whole point of this chart. This page explains what's hardened, why,

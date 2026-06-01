@@ -1,6 +1,3 @@
----
----
-
 # Monitoring (Prometheus & Grafana)
 
 The chart can run a Prometheus exporter and ships a Grafana dashboard, so you get
@@ -94,7 +91,7 @@ target is `up` in Prometheus → Status → Targets.
 
 ## 4. Import the Grafana dashboard
 
-Import the chart's bundled [`dashboards/nextcloud.json`](https://github.com/Adithya-Rajendran/nextcloud-stack-chart/blob/main/dashboards/nextcloud.json)
+Import the chart's bundled [`dashboards/nextcloud.json`](../dashboards/nextcloud.json)
 (uid `nextcloud`). It expects a Prometheus datasource with **uid `prometheus`**
 (rename in the import dialog if yours differs). Panels: status, users, files, active users (5m/1h/24h),
 free space, DB size, shares by type, federated shares, and system/PHP/DB info.

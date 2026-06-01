@@ -1,6 +1,3 @@
----
----
-
 # Getting Started
 
 This page gets you from nothing to a working Nextcloud in about ten minutes. For

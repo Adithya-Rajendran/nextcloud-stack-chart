@@ -1,6 +1,3 @@
----
----
-
 # Storage & Scaling
 
 Sizing volumes, growing them later, choosing a StorageClass, and the realities of
