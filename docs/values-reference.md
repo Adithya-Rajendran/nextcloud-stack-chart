@@ -1,7 +1,7 @@
 # Values Reference
 
 Every configurable value, grouped by block, with defaults. The authoritative,
-always-current source is [`values.yaml`](../values.yaml) (heavily commented) — this
+always-current source is [`values.yaml`](https://github.com/Adithya-Rajendran/nextcloud-stack-chart/blob/main/values.yaml) (heavily commented) — this
 page is the organised companion. Defaults below are for chart **0.3.0**.
 
 > Convention: only the keys you're likely to set are listed in full. Image blocks

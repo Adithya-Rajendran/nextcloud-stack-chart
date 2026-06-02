@@ -1,0 +1,67 @@
+site_name: nextcloud-stack
+site_description: A security-first Helm chart for Nextcloud on Kubernetes — full documentation.
+repo_url: https://github.com/Adithya-Rajendran/nextcloud-stack-chart
+repo_name: nextcloud-stack-chart
+docs_dir: docs
+
+# Render the same Markdown the GitHub wiki uses into a Material site (sidebar +
+# search). The repo is private (no GitHub Pages on the free plan), so build it
+# locally — `mkdocs serve` — or grab the artifact from the "docs" CI workflow.
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      toggle: { icon: material/weather-night, name: Switch to dark mode }
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      toggle: { icon: material/weather-sunny, name: Switch to light mode }
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
+
+# Fail the build on any broken internal link or anchor (CI runs with --strict).
+validation:
+  links:
+    not_found: warn
+    anchors: warn
+  nav:
+    omitted_files: warn
+
+nav:
+  - Home: README.md
+  - Start here:
+      - Getting Started: getting-started.md
+      - Installation: installation.md
+      - Architecture: architecture.md
+  - Configure:
+      - Configuration: configuration.md
+      - Values Reference: values-reference.md
+      - Exposure & TLS: exposure-and-tls.md
+      - Security Model: security.md
+  - Operate (day 2):
+      - Storage & Scaling: storage-and-scaling.md
+      - Backup & Restore: backup-and-restore.md
+      - Restore guide: restore.md
+      - Monitoring: monitoring.md
+      - Operations: operations.md
+      - Add-ons: add-ons.md
+  - Help:
+      - Troubleshooting: troubleshooting.md
+      - FAQ: faq.md

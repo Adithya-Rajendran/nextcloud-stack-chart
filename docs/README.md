@@ -83,6 +83,18 @@ zero to a running instance. Then come back to this map for the deep dives.
   the Nextcloud Deployment is `<release>`, Postgres is `<release>-postgres`, etc.
 - Chart version documented here: **0.3.0** (Nextcloud appVersion **33.0.3**).
 
-> This wiki lives in [`docs/`](.) in the repo, so it's versioned and reviewed
-> alongside the chart. The top-level [`README.md`](../README.md) is the quick
+> This wiki lives in [`docs/`](https://github.com/Adithya-Rajendran/nextcloud-stack-chart/tree/main/docs) in the repo, so it's versioned and reviewed
+> alongside the chart. The top-level [`README.md`](https://github.com/Adithya-Rajendran/nextcloud-stack-chart/blob/main/README.md) is the quick
 > reference; these pages are the long form.
+
+**Prefer a rendered site (sidebar + search)?** This wiki builds with
+[Material for MkDocs](https://squidfunk.github.io/mkdocs-material/):
+
+```bash
+python -m pip install -r requirements-docs.txt
+mkdocs serve     # live preview at http://127.0.0.1:8000
+```
+
+The `docs` CI workflow also builds it on every change and uploads the rendered
+site as a downloadable **`docs-site`** artifact (handy while the repo is private,
+where GitHub Pages isn't available).

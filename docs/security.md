@@ -32,7 +32,7 @@ You lose the hardened base but keep every other control below.
 
 > **Pull-secret gotcha:** the DHI pull secret must be keyed to **`dhi.io`**. A
 > Docker-Hub-keyed secret returns `401`. See
-> [Troubleshooting](troubleshooting.md#imagepullbackoff--401-unauthorized-on-dhiio).
+> [Troubleshooting](troubleshooting.md#imagepullbackoff-or-401-unauthorized-on-dhiio).
 
 ### Pin digests
 

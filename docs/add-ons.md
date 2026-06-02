@@ -9,7 +9,7 @@ single `enabled` toggle plus a little config.
 | Whiteboard | `whiteboard.enabled` | off | real-time collaborative whiteboard |
 | Metrics | `metrics.enabled` | off | Prometheus exporter → [Monitoring](monitoring.md) |
 | Backup | `backup.enabled` | off | scheduled backups → [Backup & Restore](backup-and-restore.md) |
-| Cloudflare tunnel | `cloudflare.enabled` | off | exposure → [Exposure & TLS](exposure-and-tls.md#option-3--cloudflare-tunnel-addon) |
+| Cloudflare tunnel | `cloudflare.enabled` | off | exposure → [Exposure & TLS](exposure-and-tls.md#option-3-cloudflare-tunnel-addon) |
 
 This page covers ClamAV and Whiteboard, plus notes on Office/Collabora (not
 included).
@@ -88,7 +88,7 @@ the runtime.
 
 ---
 
-## Office / Collabora (not included)
+## Office and Collabora (not included)
 
 Document editing (Collabora Online / Nextcloud Office) is **not** part of this
 chart — it has an independent lifecycle and no shared state with the stack. It's
