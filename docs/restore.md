@@ -15,7 +15,7 @@ The `<release>-backup` CronJob writes two artifacts per run to the backup PVC
 | Path on the backup PVC | Contents | How it's made |
 |---|---|---|
 | `postgres/pg-<TS>.sql.gz` | The **whole** Postgres cluster — roles + every database, including `nextcloud` | `pg_dumpall`, gzipped |
-| `nextcloud/files-<TS>.tar.gz` | `/var/www/html/data` **and** `/var/www/html/config` | live `tar czf`, gzipped |
+| `nextcloud/files-<TS>.tar.gz` | `/var/www/html/data`, `/var/www/html/config`, plus `custom_apps/` and `themes/` when present (store-installed apps + theming) | live `tar czf`, gzipped |
 
 `<TS>` is `YYYYMMDD-HHMMSS` (UTC). A matching pair (same `<TS>`) is one
 consistent point in time — always restore the DB and the files from the **same**

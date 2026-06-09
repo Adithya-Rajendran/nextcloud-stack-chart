@@ -812,6 +812,13 @@ backup:
   schedule: "30 2 * * *"          # daily 02:30
   timeZone: ""                    # IANA tz (K8s 1.27+); empty => cluster default (UTC)
   retentionDays: 14
+  # Wrap the run in `occ maintenance:mode --on/--off` so the DB dump and the
+  # files tar are ONE consistent point in time (the Nextcloud manual's
+  # recommendation). Trade-off: users get a 503 maintenance page for the length
+  # of the backup, so it's off by default — the live tar tolerates changed
+  # files and the matching-timestamp pair is consistent enough for most
+  # installs. Maintenance mode is re-disabled on every exit path (trap).
+  maintenanceMode: false
   concurrencyPolicy: Forbid
   activeDeadlineSeconds: 3600
   successfulJobsHistoryLimit: 3

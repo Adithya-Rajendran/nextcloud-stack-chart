@@ -43,3 +43,5 @@ annotations:
       description: Weekly pin-digests workflow that resolves every image tag to a digest and opens a PR updating pins.yaml / pins-public.yaml (needs DHI_USERNAME/DHI_TOKEN secrets); CI validates the pinned render when present
     - kind: fixed
       description: backup.sh now verifies the Postgres dump (gzip integrity + pg_dump completion trailer) instead of trusting pipe status, which masked failed dumps on shells without pipefail
+    - kind: changed
+      description: The backup files tar now also captures custom_apps/ (store-installed apps) and themes/ when present, and gzip-verifies the archive; new opt-in backup.maintenanceMode freezes writes during the run for a fully consistent dump↔files pair

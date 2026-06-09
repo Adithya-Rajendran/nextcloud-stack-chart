@@ -25,13 +25,49 @@ On each run the CronJob writes two artifacts to the backup PVC:
 | File | Contents | Made with |
 |---|---|---|
 | `postgres/pg-<TS>.sql.gz` | the **whole** Postgres cluster | `pg_dumpall` + gzip |
-| `nextcloud/files-<TS>.tar.gz` | `data/` **and** `config/` | live `tar` + gzip |
+| `nextcloud/files-<TS>.tar.gz` | `data/` (user files), `config/`, plus `custom_apps/` and `themes/` when present | live `tar` + gzip |
 
 `<TS>` is `YYYYMMDD-HHMMSS` (UTC). A matching pair = one consistent point in time.
 
 > `config/` is included because `config.php` holds the `secret`, `passwordsalt`,
 > and `dbpassword` the database is keyed against — the DB dump is only restorable
-> alongside its matching `config.php`.
+> alongside its matching `config.php`. `custom_apps/` (the writable apps path —
+> where store-installed apps live) and `themes/` are included so a restore
+> doesn't come back with apps the database knows about but whose code is gone.
+> Core Nextcloud code is deliberately **not** backed up: the image provides it.
+
+### Consistency: live tar vs maintenance mode
+
+By default the tar runs against the **live** Pod (changed-mid-read files are
+tolerated, `tar rc=1`). For a hard guarantee that the DB dump and the files tar
+are one frozen point in time — what the Nextcloud manual recommends — set:
+
+```yaml
+backup:
+  maintenanceMode: true   # occ maintenance:mode --on … --off around the run
+```
+
+Users see the maintenance page for the duration of the backup (schedule it for
+the quietest hour). The job re-enables normal mode on **every** exit path,
+including failures.
+
+### Why not back up / "download" the PVCs directly?
+
+There is no Kubernetes API for downloading a PVC — a volume's contents are only
+reachable through a Pod that mounts it, or via storage-layer snapshots:
+
+- **Mounting the PVCs in the backup Job** would `Multi-Attach`-deadlock on RWO
+  storage while the live Pod holds them — the exact failure mode this design
+  avoids. The `kubectl exec` + `tar` stream *is* the "download", from the one
+  Pod that legitimately has the volume mounted.
+- **Raw-copying the Postgres PVC** would capture a torn, non-restorable state
+  unless the server is stopped; `pg_dumpall` is the transactionally-consistent
+  equivalent.
+- **CSI `VolumeSnapshot`s** are a fine *complement* (fast, crash-consistent,
+  before risky upgrades) but they live in the same storage backend they
+  protect, need a per-cluster `VolumeSnapshotClass`, and aren't restorable
+  off-cluster — so the chart doesn't manage them. The off-cluster tar + dump
+  pair remains the disaster-recovery source of truth.
 
 ### How it stays safe
 

@@ -211,6 +211,7 @@ See [Monitoring](monitoring.md).
 | `backup.enabled` | `false` | |
 | `backup.schedule` | `30 2 * * *` | |
 | `backup.retentionDays` | `14` | |
+| `backup.maintenanceMode` | `false` | Freeze writes (`occ maintenance:mode`) during the run for a fully consistent dump↔files pair; costs user-facing downtime. |
 | `backup.persistence.existingClaim` / `.size` / `.storageClassName` | `""` / `10Gi` / `""` | Point at off-cluster storage. |
 
 See [Backup & Restore](backup-and-restore.md).

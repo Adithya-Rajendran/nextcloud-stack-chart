@@ -47,12 +47,13 @@ spec:
               securityContext:
                 {{- toYaml .Values.backup.containerSecurityContext | nindent 16 }}
               env:
-                - { name: HOME,           value: /tmp }
-                - { name: BACKUP_NS,      value: {{ .Release.Namespace | quote }} }
-                - { name: PG_ENABLED,     value: {{ .Values.postgres.enabled | quote }} }
-                - { name: PG_POD,         value: {{ printf "%s-0" (include "nextcloud-stack.postgres.fullname" .) | quote }} }
-                - { name: NC_DEPLOY,      value: {{ include "nextcloud-stack.nextcloud.fullname" . | quote }} }
-                - { name: RETENTION_DAYS, value: {{ .Values.backup.retentionDays | quote }} }
+                - { name: HOME,             value: /tmp }
+                - { name: BACKUP_NS,        value: {{ .Release.Namespace | quote }} }
+                - { name: PG_ENABLED,       value: {{ .Values.postgres.enabled | quote }} }
+                - { name: PG_POD,           value: {{ printf "%s-0" (include "nextcloud-stack.postgres.fullname" .) | quote }} }
+                - { name: NC_DEPLOY,        value: {{ include "nextcloud-stack.nextcloud.fullname" . | quote }} }
+                - { name: RETENTION_DAYS,   value: {{ .Values.backup.retentionDays | quote }} }
+                - { name: MAINTENANCE_MODE, value: {{ .Values.backup.maintenanceMode | quote }} }
               resources:
                 {{- toYaml .Values.backup.resources | nindent 16 }}
               volumeMounts:
