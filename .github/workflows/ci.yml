@@ -60,6 +60,21 @@ jobs:
           fi
           echo "OK: requireSecret fires correctly"
 
+      # Regression test for the multi-replica guard: replicas > 1 on RWO PVCs
+      # must abort render (Multi-Attach deadlock); RWX on both PVCs must render.
+      - name: replicas guard
+        run: |
+          if helm template test . -f example-values.yaml \
+              --set nextcloud.replicas=2 > /dev/null 2>&1; then
+            echo "FAIL: render should error on replicas=2 with RWO PVCs"
+            exit 1
+          fi
+          helm template test . -f example-values.yaml \
+            --set nextcloud.replicas=2 \
+            --set 'nextcloud.persistence.webroot.accessModes={ReadWriteMany}' \
+            --set 'nextcloud.persistence.data.accessModes={ReadWriteMany}' > /dev/null
+          echo "OK: replicas guard fires correctly"
+
       # Render the exposure methods + Cloudflare addon + DHI overlay, and assert
       # their required-value guards fire. Outputs feed kubeconform below.
       - name: render exposure + addon variants
@@ -93,6 +108,22 @@ jobs:
           if grep -q 'dhi.io' /tmp/public.yaml; then
             echo "FAIL: values-public.yaml should leave no dhi.io references"; exit 1
           fi
+          # Full-feature render: covers the whiteboard / metrics / backup /
+          # ServiceMonitor templates, which no other variant renders.
+          helm template test . -f example-values.yaml \
+            --set ingress.enabled=false \
+            --set gatewayApi.enabled=true \
+            --set gatewayApi.parentRef.name=gw \
+            --set whiteboard.enabled=true \
+            --set whiteboard.auth.existingSecret=wb \
+            --set whiteboard.publicUrl=https://nextcloud.example.com \
+            --set metrics.enabled=true \
+            --set metrics.auth.existingSecret=met \
+            --set metrics.serviceMonitor.enabled=true \
+            --set backup.enabled=true > /tmp/full.yaml
+          for kind in 'component: whiteboard' 'component: metrics' 'component: backup' 'kind: ServiceMonitor'; do
+            grep -q "$kind" /tmp/full.yaml || { echo "FAIL: full render missing '$kind'"; exit 1; }
+          done
           echo "OK: exposure + addon variants render"
 
       - name: Install kubeconform
@@ -103,14 +134,18 @@ jobs:
           kubeconform -v
 
       # Schema-validate the rendered manifests against the K8s API. -strict
-      # rejects fields the schema doesn't know. -ignore-missing-schemas skips
-      # CRDs with no built-in schema (the Gateway API HTTPRoute).
+      # rejects fields the schema doesn't know. The CRDs-catalog location
+      # validates the CRD-based kinds too (CiliumNetworkPolicy, HTTPRoute,
+      # ServiceMonitor) — without it a malformed networkPolicy.*IngressFrom
+      # entry (e.g. v1 namespaceSelector syntax) sails through CI.
+      # -ignore-missing-schemas stays as a fallback for kinds in neither source.
       - name: kubeconform
         run: |
-          for f in /tmp/rendered.yaml /tmp/gw.yaml /tmp/cf.yaml /tmp/public.yaml; do
+          for f in /tmp/rendered.yaml /tmp/gw.yaml /tmp/cf.yaml /tmp/public.yaml /tmp/full.yaml; do
             echo "== $f =="
             kubeconform -strict -ignore-missing-schemas -summary \
               -kubernetes-version 1.32.0 \
               -schema-location default \
+              -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
               "$f"
           done

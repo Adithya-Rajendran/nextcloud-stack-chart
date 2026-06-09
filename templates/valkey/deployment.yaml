@@ -21,11 +21,9 @@ spec:
     metadata:
       labels:
         {{- include "nextcloud-stack.valkey.selectorLabels" . | nindent 8 }}
-      annotations:
-        # Roll on chart-managed config change. Secret rotation is external —
-        # if you rotate the valkey-* Secret, restart the pod manually or add
-        # an annotation via podAnnotations.
-        chart/managed: "true"  # placeholder so 'annotations:' is non-empty
+      # No checksum annotation: valkey.conf lives in an EXTERNAL Secret, so the
+      # chart can't hash it. After rotating the valkey Secret, restart the pod
+      # (kubectl rollout restart) to pick up the new requirepass.
     spec:
       {{- include "nextcloud-stack.imagePullSecrets" . | nindent 6 }}
       automountServiceAccountToken: false

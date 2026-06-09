@@ -23,8 +23,7 @@ imagePullSecrets:
 
 nextcloud:
   admin:
-    name: admin
-    # Created by bootstrap-secrets.sh.
+    # Created by bootstrap-secrets.sh (keys: admin-user, admin-password).
     existingSecret: nextcloud-stack-admin
   settings:
     overwriteHost: nextcloud.example.com
@@ -84,8 +83,10 @@ ingress:
 
 networkPolicy:
   enabled: true
-  # Allow the ingress-nginx controller's namespace to reach Nextcloud.
+  # Allow the ingress-nginx controller's pods to reach Nextcloud. Entries are
+  # raw CILIUM ingress selectors (fromEndpoints / fromEntities / fromCIDRSet) —
+  # NOT NetworkPolicy-v1 namespaceSelector syntax, which Cilium rejects.
   nextcloudIngressFrom:
-    - namespaceSelector:
-        matchLabels:
-          kubernetes.io/metadata.name: ingress-nginx
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: ingress-nginx

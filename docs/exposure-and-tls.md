@@ -32,8 +32,9 @@ allow the controller's namespace:
 ```yaml
 networkPolicy:
   nextcloudIngressFrom:
-    - namespaceSelector:
-        matchLabels: { kubernetes.io/metadata.name: ingress-nginx }
+    # Raw Cilium ingress selector (NOT NetworkPolicy-v1 namespaceSelector syntax).
+    - fromEndpoints:
+        - matchLabels: { k8s:io.kubernetes.pod.namespace: ingress-nginx }
 ```
 
 ---

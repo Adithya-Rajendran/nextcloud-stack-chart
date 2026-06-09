@@ -82,7 +82,11 @@ What it allows:
 | Nextcloud | gateway (`fromEntities: [ingress]` when `gatewayApi.enabled`), Cloudflare source, `nextcloudIngressFrom`, the metrics exporter | DNS, Postgres, Valkey, ClamAV, Whiteboard, `world` (if `allowAllEgress`) |
 | Postgres / Valkey / ClamAV | Nextcloud only | DNS (+ `world` for ClamAV signatures) |
 | Metrics exporter | `metricsIngressFrom` (your Prometheus ns) | DNS, Nextcloud |
+| occ Jobs (cron, db-migrate) | — | kube-apiserver, DNS |
 | backup Job | — | kube-apiserver, DNS |
+
+The default-deny selects **this release's pods only** (by the release selector
+labels), so unrelated workloads sharing the namespace are never caught by it.
 
 Public egress uses Cilium's identity-based **`world`** entity (everything outside
 the cluster) — no CIDR list to maintain.

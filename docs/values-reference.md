@@ -55,8 +55,7 @@ cloudflared `docker.io/cloudflare/cloudflared:2024.12.2`.
 ### `nextcloud.admin`
 | Value | Default | Notes |
 |---|---|---|
-| `admin.name` | `admin` | |
-| `admin.existingSecret` | `""` **(required)** | Keys `admin-user`, `admin-password`. |
+| `admin.existingSecret` | `""` **(required)** | Keys `admin-user` (the username), `admin-password`. |
 
 ### `nextcloud.settings`
 | Value | Default | Notes |

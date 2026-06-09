@@ -20,12 +20,13 @@ fromEntities / fromCIDRSet), e.g.
 */}}
 
 # ---- catch-all default-deny -------------------------------------------------
-# Selects every pod EXCEPT the kubectl-using Jobs (cron, db-migrate); those
-# reach the kube-apiserver and are constrained by RBAC (pods/exec on the
-# nextcloud Deployment only), not by network policy. Empty ingress + egress
+# Selects every pod of THIS RELEASE (scoped by the release selector labels —
+# never unrelated workloads sharing the namespace). Empty ingress + egress
 # arrays select these endpoints for enforcement with ZERO allows = default-deny
 # in both directions; the per-component policies below union in the allows (so
 # this also supplies the egress-deny for the ingress-only component policies).
+# The kubectl Jobs (cron, db-migrate) carry the release labels too, so they are
+# enforced as well — their explicit kube-apiserver allow is further down.
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
@@ -34,10 +35,8 @@ metadata:
     {{- include "nextcloud-stack.labels" . | nindent 4 }}
 spec:
   endpointSelector:
-    matchExpressions:
-      - key: app.kubernetes.io/component
-        operator: NotIn
-        values: ["nextcloud-cron", "nextcloud-db-migrate"]
+    matchLabels:
+      {{- include "nextcloud-stack.selectorLabels" . | nindent 6 }}
   ingress: []
   egress: []
 
@@ -353,6 +352,36 @@ spec:
             {{- include "nextcloud-stack.nextcloud.selectorLabels" . | nindent 12 }}
       toPorts:
         - ports: [{ port: {{ .Values.nextcloud.service.targetPort | quote }}, protocol: TCP }]
+{{- end }}
+
+---
+# ---- occ Jobs (cron + db-migrate): egress to the kube-apiserver + DNS -------
+# These pods only run `kubectl exec` (the exec stream is tunnelled through the
+# apiserver), so that is ALL they get — same shape as the backup policy below.
+# RBAC limits what the token can do; this limits where the pod can connect.
+{{- if or .Values.nextcloud.cronJob.enabled .Values.nextcloud.dbMigrateJob.enabled }}
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-occ-jobs
+  labels:
+    {{- include "nextcloud-stack.labels" . | nindent 4 }}
+spec:
+  endpointSelector:
+    matchLabels:
+      {{- include "nextcloud-stack.selectorLabels" . | nindent 6 }}
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: ["nextcloud-cron", "nextcloud-db-migrate"]
+  egress:
+    - toEntities: [kube-apiserver]
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports: [{ port: "53", protocol: UDP }, { port: "53", protocol: TCP }]
 {{- end }}
 
 ---

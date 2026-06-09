@@ -194,9 +194,8 @@ nextcloud:
       existingClaim: ""
 
   # Admin user. The existingSecret is required (created by scripts/bootstrap-secrets.sh).
-  # Secret keys expected: `admin-user`, `admin-password`.
+  # Secret keys expected: `admin-user` (the username), `admin-password`.
   admin:
-    name: admin
     existingSecret: ""    # REQUIRED — name of pre-created K8s Secret
 
   # Server-side settings (templated into a config.php overlay).

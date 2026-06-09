@@ -61,17 +61,12 @@ NEXT STEPS
 
 4. First login:
 
-{{- if .Values.nextcloud.admin.existingSecret }}
    Username: from Secret/{{ .Values.nextcloud.admin.existingSecret }} key `admin-user`
    Password: from Secret/{{ .Values.nextcloud.admin.existingSecret }} key `admin-password`
 
    Read them:
      kubectl -n {{ .Release.Namespace }} get secret {{ .Values.nextcloud.admin.existingSecret }} \
        -o jsonpath='{.data.admin-password}' | base64 -d
-{{- else }}
-   Username: {{ .Values.nextcloud.admin.name }}
-   Password: stored in Secret/{{ include "nextcloud-stack.fullname" . }}-admin
-{{- end }}
 
    Rotate the password from the web UI immediately. Then enable TOTP/WebAuthn.
 
@@ -100,12 +95,21 @@ NEXT STEPS
 
 VERIFY CLUSTER ASSUMPTIONS
 --------------------------
-- networkPolicy.inClusterCidrs (currently {{ .Values.networkPolicy.inClusterCidrs }})
-  must cover BOTH the pod CIDR and the Service CIDR so in-cluster traffic stays
-  on the explicit per-Service rules. The RFC1918 default fits most clusters;
-  narrow it for tighter egress control. Find both with:
-    kubectl get nodes -o jsonpath='{.items[*].spec.podCIDR}'
-    kubectl cluster-info dump | grep -m1 service-cluster-ip-range
-- NetworkPolicies only enforce if your CNI supports them (Cilium, Calico, …).
+{{- if .Values.networkPolicy.enabled }}
+- The rendered network policy is a CiliumNetworkPolicy (cilium.io/v2) and only
+  enforces on Cilium. On another CNI it is silently ignored — set
+  networkPolicy.enabled=false and bring an equivalent policy instead.
+{{- else }}
+- ⚠  networkPolicy.enabled is FALSE — there is no default-deny around these
+  pods. PHP-FPM :9000, Postgres :5432 and Valkey :6379 are reachable from any
+  pod in the cluster unless you bring your own policy.
+{{- end }}
+{{- if and .Values.valkey.enabled (not .Values.valkey.auth.enabled) }}
+- ⚠  valkey.auth.enabled is FALSE — Valkey accepts UNAUTHENTICATED connections.
+  protected-mode does not apply once the server explicitly binds 0.0.0.0, so
+  anything that can reach the pod can read/write Nextcloud's cache, sessions
+  and file locks. Re-enable auth (scripts/bootstrap-secrets.sh creates the
+  Secret) unless network policy fully isolates the pod.
+{{- end }}
 
 See README.md for more.

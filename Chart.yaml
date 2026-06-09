@@ -2,13 +2,13 @@ apiVersion: v2
 name: nextcloud-stack
 description: |
   Self-hosted Nextcloud stack — fpm + nginx in one Pod, Postgres, Valkey, and
-  optional ClamAV. Public images by default; expose via Ingress, Gateway API, or
-  the optional Cloudflare tunnel addon. A `helm upgrade` needs no out-of-chart
-  re-apply work.
+  optional ClamAV. Docker Hardened Images by default (public-image overlay
+  bundled); expose via Ingress, Gateway API, or the optional Cloudflare tunnel
+  addon. A `helm upgrade` needs no out-of-chart re-apply work.
 type: application
 
 # Chart version — bump on chart changes.
-version: 0.3.0
+version: 0.4.0
 
 # Pinned to the custom fpm image's Nextcloud version.
 # When bumping Nextcloud, bump this AND values.yaml `nextcloud.image.tag`.
@@ -35,13 +35,15 @@ dependencies: []
 annotations:
   # Bumped each time the *manifest* shape changes meaningfully.
   artifacthub.io/changes: |
-    - kind: added
-      description: Public-image overlay (values-public.yaml) for installs without a Docker Hardened Images subscription; DHI remains the default
-    - kind: added
-      description: Ingress and Gateway API (HTTPRoute) templates, both disabled by default
-    - kind: added
-      description: Optional Cloudflare addon (cloudflare.enabled) that can deploy cloudflared and switches real-IP handling to CF-Connecting-IP
+    - kind: security
+      description: Restore the security headers (nosniff, X-Frame-Options, Referrer-Policy, …) on static-asset responses — the location-level Cache-Control add_header was cancelling the inherited server-level set
+    - kind: security
+      description: The occ cron + db-migrate Jobs are now network-policy enforced (egress to kube-apiserver + DNS only, mirroring the backup Job) instead of exempted from the default-deny
+    - kind: fixed
+      description: The default-deny CiliumNetworkPolicy now selects only this release's pods instead of every pod in the namespace
+    - kind: fixed
+      description: example-values + docs showed NetworkPolicy-v1 namespaceSelector syntax for networkPolicy.*IngressFrom, which CiliumNetworkPolicy rejects — corrected to Cilium fromEndpoints selectors
     - kind: changed
-      description: Generic X-Forwarded-For real-IP trust by default; NetworkPolicy ingress is now a configurable source list (networkPolicy.nextcloudIngressFrom)
-    - kind: changed
-      description: De-personalized defaults — default StorageClass, RFC1918 in-cluster CIDRs, example.com placeholders
+      description: nextcloud.replicas > 1 now fails render unless both Nextcloud PVCs are ReadWriteMany (RWO would Multi-Attach); removed the unused nextcloud.admin.name value
+    - kind: added
+      description: NOTES warnings for valkey.auth.enabled=false and networkPolicy.enabled=false; CI now schema-validates CiliumNetworkPolicy/HTTPRoute/ServiceMonitor and renders the backup/whiteboard/metrics templates
