@@ -14,15 +14,24 @@ mkdir -p "$PGDIR" "$NCDIR"
 echo "[$(date -u)] === backup $TS start ==="
 
 # ---- Postgres: pg_dumpall is a single consistent snapshot -------------------
+# Verification is content-based, NOT pipe-status-based: without pipefail (not
+# every /bin/sh has it) a failed pg_dumpall would still leave a small valid
+# gzip from the empty stream and "succeed". A complete dump always ends with
+# pg_dump's "PostgreSQL database dump complete" trailer; checking gzip
+# integrity + that trailer catches auth failures, truncation, and masked
+# kubectl exec errors regardless of shell semantics.
 if [ "${PG_ENABLED:-true}" = "true" ]; then
   echo "[$(date -u)] postgres dump -> pg-$TS.sql.gz"
-  if kubectl exec -n "$BACKUP_NS" "$PG_POD" -c postgres -- \
-       sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_dumpall -U "$POSTGRES_USER" -h 127.0.0.1' \
-       | gzip > "$PGDIR/pg-$TS.sql.gz.tmp" && [ -s "$PGDIR/pg-$TS.sql.gz.tmp" ]; then
-    mv "$PGDIR/pg-$TS.sql.gz.tmp" "$PGDIR/pg-$TS.sql.gz"
+  PGTMP="$PGDIR/pg-$TS.sql.gz.tmp"
+  kubectl exec -n "$BACKUP_NS" "$PG_POD" -c postgres -- \
+    sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_dumpall -U "$POSTGRES_USER" -h 127.0.0.1' \
+    | gzip > "$PGTMP" || true
+  if [ -s "$PGTMP" ] && gzip -t "$PGTMP" 2>/dev/null \
+     && zcat "$PGTMP" | tail -c 4096 | grep -q 'PostgreSQL database dump complete'; then
+    mv "$PGTMP" "$PGDIR/pg-$TS.sql.gz"
     echo "  ok: $(ls -lh "$PGDIR/pg-$TS.sql.gz" | awk '{print $5}')"
   else
-    rm -f "$PGDIR/pg-$TS.sql.gz.tmp"; echo "  POSTGRES BACKUP FAILED" >&2; exit 1
+    rm -f "$PGTMP"; echo "  POSTGRES BACKUP FAILED (missing dump trailer or corrupt gzip)" >&2; exit 1
   fi
 fi
 

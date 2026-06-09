@@ -93,17 +93,27 @@ Secrets are external, so rotation is a Secret update + a nudge:
   `occ user:resetpassword admin`. The `<release>-admin` Secret only matters at
   first install, so you don't strictly need to update it — but keep it in sync if
   you rely on it.
-- **Postgres password.** Order matters (short outage):
+- **Postgres app password.** With `postgres.auth.manageAppRole` (the default)
+  the init container syncs the role's password from the Secret on every pod
+  start, so rotation is patch + restart. Patch the single key — do **not**
+  recreate the Secret, it holds two keys:
   ```bash
-  # 1. update the Secret
-  kubectl -n nextcloud create secret generic nextcloud-stack-postgres \
-    --from-literal=nextcloud-db-password='<new>' --dry-run=client -o yaml \
-    | kubectl apply -f -
-  # 2. change it in the DB
-  kubectl -n nextcloud exec nextcloud-stack-postgres-0 -- \
-    psql -U nextcloud -c "ALTER ROLE nextcloud WITH PASSWORD '<new>';"
-  # 3. restart Nextcloud to pick up the new env
+  # 1. update ONLY the app key
+  kubectl -n nextcloud patch secret nextcloud-stack-postgres --type=json -p \
+    '[{"op":"replace","path":"/data/nextcloud-db-password","value":"'"$(printf '%s' '<new>' | base64 | tr -d '\n')"'"}]'
+  # 2. restart Nextcloud — the init container applies the new password to the role
   kubectl -n nextcloud rollout restart deploy/nextcloud-stack
+  ```
+  (With `manageAppRole: false`, also run the old manual step between 1 and 2:
+  `kubectl exec nextcloud-stack-postgres-0 -- psql -U nextcloud -c "ALTER ROLE nextcloud WITH PASSWORD '<new>';"`.)
+- **Postgres admin password** (`postgres-admin-password`, `manageAppRole` only).
+  Change the role FIRST, then the Secret — the init container authenticates
+  with the Secret's value and fails loudly if they diverge:
+  ```bash
+  kubectl -n nextcloud exec nextcloud-stack-postgres-0 -- \
+    psql -U postgres -c "ALTER ROLE postgres WITH PASSWORD '<new>';"
+  kubectl -n nextcloud patch secret nextcloud-stack-postgres --type=json -p \
+    '[{"op":"replace","path":"/data/postgres-admin-password","value":"'"$(printf '%s' '<new>' | base64 | tr -d '\n')"'"}]'
   ```
 - **Valkey password.** Update the `<release>-valkey` Secret (both
   `valkey-password` and the `requirepass` in `valkey.conf`), then

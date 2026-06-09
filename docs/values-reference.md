@@ -104,8 +104,9 @@ cloudflared `docker.io/cloudflare/cloudflared:2024.12.2`.
 | Value | Default | Notes |
 |---|---|---|
 | `postgres.enabled` | `true` | |
-| `postgres.auth.database` / `.username` | `nextcloud` / `nextcloud` | |
-| `postgres.auth.existingSecret` | `""` **(required)** | Key `nextcloud-db-password`. |
+| `postgres.auth.database` / `.username` | `nextcloud` / `nextcloud` | Must not be `postgres` with `manageAppRole`. |
+| `postgres.auth.existingSecret` | `""` **(required)** | Keys `nextcloud-db-password` + (with `manageAppRole`) `postgres-admin-password`. |
+| `postgres.auth.manageAppRole` | `true` | Run Nextcloud as a dedicated `NOSUPERUSER` role that owns only its DB; the `postgres` superuser stays separate. Legacy installs are auto-migrated — see [Security › Database privilege separation](security.md#database-privilege-separation). |
 | `postgres.persistence.size` | `10Gi` | |
 | `postgres.resources` | req `100m`/`256Mi`, lim `1`/`1Gi` | |
 | `postgres.service.port` | `5432` | |
@@ -168,11 +169,12 @@ cloudflared `docker.io/cloudflare/cloudflared:2024.12.2`.
 
 | Value | Default | Notes |
 |---|---|---|
-| `networkPolicy.enabled` | `true` | **CiliumNetworkPolicy** — requires Cilium. |
-| `networkPolicy.nextcloudIngressFrom` | `[]` | Raw Cilium selectors for extra fronts. |
+| `networkPolicy.enabled` | `true` | |
+| `networkPolicy.flavor` | `cilium` | `cilium` (full fidelity, requires Cilium) or `kubernetes` (standard v1 for any policy-enforcing CNI, with documented approximations). |
+| `networkPolicy.nextcloudIngressFrom` | `[]` | Raw ingress-source objects in the selected flavor's schema. |
 | `networkPolicy.whiteboardIngressFrom` | `[]` | Defaults to `nextcloudIngressFrom`. |
 | `networkPolicy.metricsIngressFrom` | `[]` | Your Prometheus namespace. |
-| `networkPolicy.allowAllEgress` | `true` | Public egress via Cilium `world`. |
+| `networkPolicy.allowAllEgress` | `true` | Public egress (Cilium `world`, or its v1 ipBlock approximation). |
 
 See [Security › NetworkPolicy](security.md#networkpolicy-requires-cilium).
 

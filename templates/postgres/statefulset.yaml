@@ -3,10 +3,16 @@
 Postgres StatefulSet. Single replica, RWO Cinder, retain SC. Stable name
 matters because Nextcloud's connection string points at this pod by DNS.
 
-The initdb script (templates/postgres/configmap-initdb.yaml) runs on first
-boot only and creates the nextcloud db + user with correct schema ownership.
+Bootstrap is env-only (no /docker-entrypoint-initdb.d — the DHI image ignores
+it). With manageAppRole the instance bootstraps with a dedicated `postgres`
+superuser and the app role/database are created by the nextcloud Pod's
+wait-for-postgres init container; without it, the app user is the bootstrap
+superuser (legacy).
 */}}
 {{- include "nextcloud-stack.requireSecret" (dict "existing" .Values.postgres.auth.existingSecret "section" "postgres.auth") -}}
+{{- if and .Values.postgres.auth.manageAppRole (or (eq .Values.postgres.auth.username "postgres") (eq .Values.postgres.auth.database "postgres")) -}}
+{{- fail "postgres.auth.manageAppRole reserves the name 'postgres' for the admin role and maintenance database. Set postgres.auth.username/database to something else (default: nextcloud), or set manageAppRole=false." -}}
+{{- end -}}
 {{- $fullname := include "nextcloud-stack.postgres.fullname" . -}}
 {{- $dbSecret := include "nextcloud-stack.secretName" (dict "existing" .Values.postgres.auth.existingSecret "default" (printf "%s-postgres" (include "nextcloud-stack.fullname" .))) -}}
 apiVersion: apps/v1
@@ -41,18 +47,33 @@ spec:
           securityContext:
             {{- toYaml .Values.postgres.containerSecurityContext | nindent 12 }}
           env:
-            # Bootstrap directly as the nextcloud user/db via the upstream
-            # POSTGRES_* env vars — the canonical way, and the one that works on
-            # both the public image and the DHI overlay (DHI's postgres doesn't
-            # honor /docker-entrypoint-initdb.d/). As the bootstrap superuser,
-            # nextcloud owns the database AND the public schema — the Postgres-15+
-            # schema-permission gotcha vanishes.
+{{- if .Values.postgres.auth.manageAppRole }}
+            # Privilege separation: bootstrap the instance with a dedicated
+            # `postgres` superuser via the upstream POSTGRES_* env vars (works on
+            # both the public image and the DHI overlay — DHI's postgres doesn't
+            # honor /docker-entrypoint-initdb.d/). The app role + database are
+            # created/enforced by the nextcloud Pod's wait-for-postgres init
+            # container (NOSUPERUSER, owns ONLY its database — DB ownership
+            # covers the Postgres-15+ public-schema permission). POSTGRES_* env
+            # is only read on first initdb; on existing data dirs the init
+            # container migrates the legacy app-user-as-superuser layout.
+            # POSTGRES_USER is also what backup.sh dumps as (pg_dumpall needs
+            # the superuser).
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ $dbSecret }}, key: postgres-admin-password } }
+{{- else }}
+            # Legacy single-role bootstrap: the app user IS the instance
+            # superuser and owns the database + public schema. Discouraged —
+            # see postgres.auth.manageAppRole in values.yaml.
             - name: POSTGRES_USER
               value: {{ .Values.postgres.auth.username | quote }}
             - name: POSTGRES_DB
               value: {{ .Values.postgres.auth.database | quote }}
             - name: POSTGRES_PASSWORD
               valueFrom: { secretKeyRef: { name: {{ $dbSecret }}, key: nextcloud-db-password } }
+{{- end }}
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
           ports:

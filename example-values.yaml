@@ -86,6 +86,8 @@ networkPolicy:
   # Allow the ingress-nginx controller's pods to reach Nextcloud. Entries are
   # raw CILIUM ingress selectors (fromEndpoints / fromEntities / fromCIDRSet) —
   # NOT NetworkPolicy-v1 namespaceSelector syntax, which Cilium rejects.
+  # On a non-Cilium CNI set networkPolicy.flavor: kubernetes; entries then use
+  # the v1 NetworkPolicyPeer form (namespaceSelector / podSelector / ipBlock).
   nextcloudIngressFrom:
     - fromEndpoints:
         - matchLabels:

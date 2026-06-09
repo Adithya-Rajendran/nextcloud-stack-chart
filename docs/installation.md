@@ -39,7 +39,7 @@ The bundled script generates strong passwords and creates everything:
 | Flag | Adds the Secret | Keys |
 |---|---|---|
 | *(always)* | `<release>-admin` | `admin-user`, `admin-password` |
-| *(always)* | `<release>-postgres` | `nextcloud-db-password` |
+| *(always)* | `<release>-postgres` | `nextcloud-db-password`, `postgres-admin-password` |
 | *(always)* | `<release>-valkey` | `valkey-password`, `valkey.conf` |
 | `--whiteboard` | `<release>-whiteboard` | `jwt-secret-key`, `redis-url` |
 | `--metrics` | `<release>-metrics` | `token` |

@@ -1,18 +1,25 @@
 {{- if .Values.networkPolicy.enabled }}
+{{- $flavor := .Values.networkPolicy.flavor | default "cilium" }}
+{{- if not (has $flavor (list "cilium" "kubernetes")) }}
+{{- fail (printf "networkPolicy.flavor must be \"cilium\" or \"kubernetes\", got %q" $flavor) }}
+{{- end }}
+{{- if eq $flavor "cilium" }}
 {{/*
-CiliumNetworkPolicy — default-deny + per-component allows.
+CiliumNetworkPolicy — default-deny + per-component allows (networkPolicy.flavor:
+cilium, the default).
 
-This chart uses CiliumNetworkPolicy (cilium.io/v2), NOT standard NetworkPolicy.
-Rationale: under Cilium's Gateway/Ingress the proxied traffic carries the
-reserved `ingress` identity, which standard NetworkPolicy v1 cannot select — so
-a gateway-fronted install 503s with a v1 policy. Cilium-native policy also lets
-us write `toEntities: [world]` (clean public-internet egress) and `fromEntities:
-[ingress]` (exactly the gateway proxy) instead of CIDR/identity hacks.
+Rationale for the Cilium dialect: under Cilium's Gateway/Ingress the proxied
+traffic carries the reserved `ingress` identity, which standard NetworkPolicy v1
+cannot select — so a gateway-fronted install 503s with a v1 policy. Cilium-native
+policy also lets us write `toEntities: [world]` (clean public-internet egress)
+and `toEntities: [kube-apiserver]` (precise kubectl-Job egress) instead of
+CIDR/identity hacks.
 
-REQUIRES Cilium. On another CNI set networkPolicy.enabled=false and bring your
-own policy. See README "Network policy (Cilium)".
+REQUIRES Cilium. On another policy-enforcing CNI set networkPolicy.flavor:
+kubernetes for the standard-v1 rendering (templates/networkpolicy-v1.yaml, with
+documented approximations). See README "Network policy (Cilium)".
 
-`*IngressFrom` values are now raw Cilium ingress selectors (fromEndpoints /
+`*IngressFrom` values are raw Cilium ingress selectors (fromEndpoints /
 fromEntities / fromCIDRSet), e.g.
   nextcloudIngressFrom:
     - fromEndpoints:
@@ -446,4 +453,5 @@ spec:
       toPorts:
         - ports: [{ port: {{ .Values.nextcloud.service.targetPort | quote }}, protocol: TCP }]
 {{- end }}
-{{- end }}
+{{- end }}{{/* eq flavor cilium */}}
+{{- end }}{{/* networkPolicy.enabled */}}

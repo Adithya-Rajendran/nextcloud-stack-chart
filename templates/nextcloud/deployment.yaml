@@ -71,12 +71,28 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         {{- toYaml .Values.nextcloud.podSecurityContext | nindent 8 }}
-      # Init: wait for Postgres + Valkey before fpm starts.
+      # Init: wait for Postgres (and, with manageAppRole, ensure the app role)
+      # before fpm starts.
       initContainers:
         - name: wait-for-postgres
-          # Use the postgres image — it has pg_isready AND a shell for the loop.
+          # Use the postgres image — it has pg_isready + psql AND a shell.
           image: {{ include "nextcloud-stack.image" .Values.postgres.image }}
           imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+{{- if and .Values.postgres.enabled .Values.postgres.auth.manageAppRole }}
+          env:
+            - name: HOME
+              value: /tmp
+            - name: PGCONNECT_TIMEOUT
+              value: "10"
+            - name: PGAPP_USER
+              value: {{ .Values.postgres.auth.username | quote }}
+            - name: PGAPP_DB
+              value: {{ .Values.postgres.auth.database | quote }}
+            - name: PGAPP_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ $dbSecret }}, key: nextcloud-db-password } }
+            - name: PGADMIN_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ $dbSecret }}, key: postgres-admin-password } }
+{{- end }}
           command:
             - /bin/sh
             - -c
@@ -85,14 +101,78 @@ spec:
               host="{{ include "nextcloud-stack.postgres.host" . }}"
               port="{{ .Values.postgres.service.port }}"
               echo "Waiting for $host:$port ..."
+              ready=0
               for i in $(seq 1 60); do
                 if pg_isready -h "$host" -p "$port" -q; then
-                  echo "$host:$port reachable"; exit 0
+                  ready=1; break
                 fi
                 sleep 2
               done
-              echo "Timed out waiting for $host:$port" >&2
-              exit 1
+              if [ "$ready" -ne 1 ]; then
+                echo "Timed out waiting for $host:$port" >&2
+                exit 1
+              fi
+              echo "$host:$port reachable"
+{{- if and .Values.postgres.enabled .Values.postgres.auth.manageAppRole }}
+
+              # ---- app-role separation (idempotent, runs every pod start) ----
+              # Guarantees BEFORE fpm starts: the app role exists, owns the app
+              # database, its password matches the Secret (rotation = rotate
+              # Secret + restart), and — wherever PostgreSQL permits — carries
+              # no superuser-ish attributes. Legacy data dirs (chart <= 0.4
+              # bootstrapped the app user AS the instance superuser): while the
+              # app role is still super, it creates the `postgres` admin role;
+              # PostgreSQL <= 15 then demotes the app role, but PostgreSQL 16+
+              # REFUSES to demote the cluster's bootstrap role, so there the
+              # script warns and continues (full separation needs a rebuild
+              # from backup — docs/security.md). psql -v/:'var' quoting keeps
+              # the passwords out of the SQL text and injection-safe.
+              psql_admin() { PGPASSWORD="$PGADMIN_PASSWORD" psql -X -q -h "$host" -p "$port" -U postgres -d postgres "$@"; }
+              psql_app()   { PGPASSWORD="$PGAPP_PASSWORD"   psql -X -q -h "$host" -p "$port" -U "$PGAPP_USER" -d "$PGAPP_DB" "$@"; }
+
+              if ! psql_admin -Atc 'SELECT 1' >/dev/null 2>&1; then
+                is_super="$(psql_app -Atc 'SELECT rolsuper FROM pg_roles WHERE rolname = current_user' 2>/dev/null || true)"
+                if [ "$is_super" = "t" ]; then
+                  echo "legacy bootstrap detected: creating dedicated 'postgres' admin role"
+                  psql_app -v ON_ERROR_STOP=1 -v admin_pw="$PGADMIN_PASSWORD" <<'SQL'
+              SELECT 'CREATE ROLE postgres' WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'postgres')\gexec
+              ALTER ROLE postgres WITH LOGIN SUPERUSER PASSWORD :'admin_pw';
+              SQL
+                else
+                  echo "ERROR: cannot connect as 'postgres' using the Secret's postgres-admin-password key," >&2
+                  echo "and '$PGAPP_USER' is not a legacy superuser that could create it." >&2
+                  echo "Re-run scripts/bootstrap-secrets.sh (adds the key to the Secret), fix the key's value," >&2
+                  echo "or set postgres.auth.manageAppRole=false to keep the legacy layout." >&2
+                  exit 1
+                fi
+              fi
+
+              # Hygiene first (safe even on an undemotable bootstrap role):
+              # role exists + LOGIN + Secret-synced password; database exists,
+              # app-owned, PUBLIC's default grants dropped.
+              psql_admin -v ON_ERROR_STOP=1 -v app="$PGAPP_USER" -v db="$PGAPP_DB" -v app_pw="$PGAPP_PASSWORD" <<'SQL'
+              SELECT format('CREATE ROLE %I LOGIN', :'app') WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = :'app')\gexec
+              ALTER ROLE :"app" WITH LOGIN PASSWORD :'app_pw';
+              SELECT format('CREATE DATABASE %I OWNER %I', :'db', :'app') WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = :'db')\gexec
+              ALTER DATABASE :"db" OWNER TO :"app";
+              REVOKE ALL ON DATABASE :"db" FROM PUBLIC;
+              SQL
+
+              demote='ALTER ROLE :"app" WITH NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;'
+              bootstrap_role="$(psql_admin -Atc 'SELECT rolname FROM pg_roles WHERE oid = 10')"
+              if [ "$bootstrap_role" != "$PGAPP_USER" ]; then
+                printf '%s\n' "$demote" | psql_admin -v ON_ERROR_STOP=1 -v app="$PGAPP_USER"
+                echo "app-role separation OK: '$PGAPP_USER' is NOSUPERUSER and owns '$PGAPP_DB'"
+              elif printf '%s\n' "$demote" | psql_admin -v ON_ERROR_STOP=1 -v app="$PGAPP_USER" >/dev/null 2>&1; then
+                echo "app-role separation OK: demoted legacy bootstrap role '$PGAPP_USER' (PostgreSQL <= 15)"
+              else
+                echo "WARNING: '$PGAPP_USER' is this cluster's BOOTSTRAP superuser and PostgreSQL 16+" >&2
+                echo "refuses to demote the bootstrap role — the app keeps superuser on this data" >&2
+                echo "directory. Password sync + database hygiene were still applied. For full" >&2
+                echo "privilege separation, rebuild from a backup onto a fresh PVC (which" >&2
+                echo "bootstraps as 'postgres') — see docs/security.md#database-privilege-separation." >&2
+              fi
+{{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

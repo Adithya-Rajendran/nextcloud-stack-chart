@@ -1,0 +1,83 @@
+name: Refresh image digest pins
+
+# Resolves every image tag in values.yaml (and the values-public.yaml overlay)
+# to its current registry digest and opens a PR updating pins.yaml /
+# pins-public.yaml. Merging that PR is the deliberate "adopt upstream image
+# updates" act — installs then run digest-pinned regardless of tag mutation:
+#
+#   helm upgrade ... -f example-values.yaml -f pins.yaml
+#
+# Requirements (repo settings):
+#   * Actions secrets DHI_USERNAME / DHI_TOKEN — a Docker account with dhi.io
+#     access (a free account suffices; create a PAT for the token).
+#   * "Allow GitHub Actions to create and approve pull requests" enabled
+#     (Settings > Actions > General), or swap the token below for a PAT so the
+#     created PR also triggers the CI workflow (PRs opened with the default
+#     GITHUB_TOKEN do not trigger other workflows — re-run CI manually or
+#     close/reopen the PR if you keep the default).
+
+on:
+  schedule:
+    - cron: "17 6 * * 1" # weekly, Monday 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  pin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Require dhi.io credentials
+        env:
+          DHI_USERNAME: ${{ secrets.DHI_USERNAME }}
+          DHI_TOKEN: ${{ secrets.DHI_TOKEN }}
+        run: |
+          if [ -z "$DHI_USERNAME" ] || [ -z "$DHI_TOKEN" ]; then
+            echo "::error::DHI_USERNAME / DHI_TOKEN secrets are not set — cannot resolve dhi.io digests."
+            exit 1
+          fi
+
+      - name: Install crane
+        run: |
+          curl -fsSL https://github.com/google/go-containerregistry/releases/download/v0.20.3/go-containerregistry_Linux_x86_64.tar.gz \
+            | sudo tar -xz -C /usr/local/bin crane
+          crane version
+
+      - name: Log in to dhi.io
+        env:
+          DHI_USERNAME: ${{ secrets.DHI_USERNAME }}
+          DHI_TOKEN: ${{ secrets.DHI_TOKEN }}
+        run: printf '%s' "$DHI_TOKEN" | crane auth login dhi.io -u "$DHI_USERNAME" --password-stdin
+
+      - name: Resolve digests
+        run: |
+          # Default (DHI) images.
+          ./scripts/pin-digests.sh values.yaml > pins.yaml
+          # Public overlay: pin against the MERGED values (overlay overrides a
+          # subset of images; the rest come from values.yaml). yq is
+          # preinstalled on ubuntu-latest runners.
+          yq eval-all '. as $item ireduce ({}; . * $item)' values.yaml values-public.yaml \
+            > /tmp/values-merged-public.yaml
+          ./scripts/pin-digests.sh /tmp/values-merged-public.yaml > pins-public.yaml
+          git diff --stat -- pins.yaml pins-public.yaml || true
+
+      - name: Open PR with updated pins
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: ci/refresh-digest-pins
+          commit-message: "chore: refresh image digest pins"
+          title: "chore: refresh image digest pins"
+          body: |
+            Automated digest refresh from the `Refresh image digest pins` workflow.
+
+            Review the diff: each changed digest means the upstream tag moved.
+            Merging adopts those images for every install that passes
+            `-f pins.yaml` (or `-f pins-public.yaml` with the public overlay).
+          add-paths: |
+            pins.yaml
+            pins-public.yaml
+          delete-branch: true

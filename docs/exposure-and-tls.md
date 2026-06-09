@@ -32,7 +32,10 @@ allow the controller's namespace:
 ```yaml
 networkPolicy:
   nextcloudIngressFrom:
-    # Raw Cilium ingress selector (NOT NetworkPolicy-v1 namespaceSelector syntax).
+    # Raw Cilium ingress selector (the default flavor). With
+    # networkPolicy.flavor=kubernetes use the v1 form instead:
+    #   - namespaceSelector:
+    #       matchLabels: { kubernetes.io/metadata.name: ingress-nginx }
     - fromEndpoints:
         - matchLabels: { k8s:io.kubernetes.pod.namespace: ingress-nginx }
 ```
