@@ -194,9 +194,8 @@ nextcloud:
       existingClaim: ""
 
   # Admin user. The existingSecret is required (created by scripts/bootstrap-secrets.sh).
-  # Secret keys expected: `admin-user`, `admin-password`.
+  # Secret keys expected: `admin-user` (the username), `admin-password`.
   admin:
-    name: admin
     existingSecret: ""    # REQUIRED — name of pre-created K8s Secret
 
   # Server-side settings (templated into a config.php overlay).
@@ -307,11 +306,27 @@ postgres:
     accessModes: ["ReadWriteOnce"]
 
   # Database / user / external Secret reference.
-  # Secret key expected: `nextcloud-db-password`.
+  # Secret keys expected: `nextcloud-db-password` (the app role) and — with
+  # manageAppRole — `postgres-admin-password` (the `postgres` superuser).
+  # scripts/bootstrap-secrets.sh creates both (and patches the admin key into
+  # a pre-existing Secret on re-run).
   auth:
     database: nextcloud
     username: nextcloud
     existingSecret: ""    # REQUIRED — name of pre-created K8s Secret
+    # Privilege separation: bootstrap the cluster with a dedicated `postgres`
+    # superuser and run Nextcloud as a NOSUPERUSER role that merely OWNS its
+    # database (DB ownership covers the Postgres-15+ public-schema permission
+    # so app installs/migrations keep working). Without this, the app role IS
+    # the instance superuser — an app-level SQL injection then yields code
+    # execution in the postgres container via COPY FROM PROGRAM.
+    # The wait-for-postgres init container enforces it idempotently on every
+    # pod start and AUTO-MIGRATES legacy installs (chart <= 0.4) by demoting
+    # the app role. UPGRADE NOTE: re-run scripts/bootstrap-secrets.sh first so
+    # the Secret gains the postgres-admin-password key, or the pods fail with
+    # CreateContainerConfigError. Set false to keep the legacy single-superuser
+    # behavior (discouraged).
+    manageAppRole: true
 
   # Postgres user/group. dhi.io/postgres is UID 70 (also the public Alpine UID).
   # (The public Debian variant uses 999 — adjust here if you switch to it.)
@@ -621,35 +636,60 @@ cloudflare:
 # NetworkPolicy (publicly-exposed install ⇒ on by default)
 # -----------------------------------------------------------------------------
 networkPolicy:
-  # Renders CiliumNetworkPolicy (cilium.io/v2). REQUIRES Cilium — the Gateway API
-  # path allows the gateway via fromEntities:[ingress], which standard
-  # NetworkPolicy v1 cannot express. On another CNI set this to false and bring
-  # your own policy. See README "Network policy (Cilium)".
   enabled: true
 
-  # Extra sources allowed to reach Nextcloud on the HTTP port, as raw Cilium
-  # ingress selectors (fromEndpoints / fromEntities / fromCIDRSet). The Cilium
-  # gateway proxy is allowed AUTOMATICALLY when gatewayApi.enabled, and the
-  # Cloudflare addon adds its own source — so this is only for OTHER fronts (e.g.
-  # a separate ingress controller). Empty ⇒ no extra sources.
+  # Policy dialect:
+  #   cilium     -> CiliumNetworkPolicy (cilium.io/v2). Full fidelity: the
+  #                 Cilium Gateway proxy is allowed via fromEntities:[ingress]
+  #                 (inexpressible in v1), public egress uses the identity-based
+  #                 `world` entity, kubectl Jobs get a precise kube-apiserver
+  #                 entity allow. REQUIRES Cilium.
+  #   kubernetes -> standard networking.k8s.io/v1 NetworkPolicy for any
+  #                 policy-enforcing CNI (Calico, kube-router, …), with
+  #                 documented approximations:
+  #                   * no gateway identity — if you front Nextcloud with a
+  #                     CILIUM Gateway you must use flavor cilium; other
+  #                     gateways/ingress controllers run as pods, so add them
+  #                     to nextcloudIngressFrom;
+  #                   * "world" egress ≈ ipBlock 0.0.0.0/0 minus RFC1918 +
+  #                     link-local (clusters on public pod/node IPs leak
+  #                     in-cluster ranges into "world");
+  #                   * kube-apiserver egress ≈ TCP 443/6443 to anywhere (the
+  #                     apiserver has no stable selectable identity in v1).
+  flavor: cilium
+
+  # Extra sources allowed to reach Nextcloud on the HTTP port. Entries are raw
+  # ingress-source objects in the SELECTED FLAVOR's schema:
+  #   flavor cilium     -> fromEndpoints / fromEntities / fromCIDRSet
+  #   flavor kubernetes -> NetworkPolicyPeer (namespaceSelector / podSelector /
+  #                        ipBlock)
+  # The Cilium gateway proxy is allowed AUTOMATICALLY when gatewayApi.enabled
+  # (cilium flavor only), and the Cloudflare addon adds its own source — so this
+  # is only for OTHER fronts (e.g. a separate ingress controller). Empty ⇒ no
+  # extra sources.
   #
-  # Example — an ingress-nginx controller's namespace:
+  # Example — an ingress-nginx controller's namespace, flavor cilium:
   #   - fromEndpoints:
   #       - matchLabels:
   #           k8s:io.kubernetes.pod.namespace: ingress-nginx
+  # Same, flavor kubernetes:
+  #   - namespaceSelector:
+  #       matchLabels:
+  #         kubernetes.io/metadata.name: ingress-nginx
   nextcloudIngressFrom: []
 
   # Same, for the Whiteboard backend (port 3002). Defaults to nextcloudIngressFrom
   # when empty (browsers reach it through the same front). The Cilium gateway is
-  # allowed automatically when gatewayApi.enabled.
+  # allowed automatically when gatewayApi.enabled (cilium flavor).
   whiteboardIngressFrom: []
 
-  # Sources allowed to scrape the metrics exporter (port 9205), as raw Cilium
-  # ingress selectors — typically your Prometheus namespace. REQUIRED for
-  # Prometheus to reach the exporter when metrics.enabled + this policy are both
-  # on; empty ⇒ the default-deny catch-all blocks every scraper.
+  # Sources allowed to scrape the metrics exporter (port 9205), in the selected
+  # flavor's schema (see nextcloudIngressFrom) — typically your Prometheus
+  # namespace. REQUIRED for Prometheus to reach the exporter when
+  # metrics.enabled + this policy are both on; empty ⇒ the default-deny
+  # catch-all blocks every scraper.
   #
-  # Example — a Prometheus in the `observability` namespace:
+  # Example — a Prometheus in the `observability` namespace, flavor cilium:
   #   - fromEndpoints:
   #       - matchLabels:
   #           k8s:io.kubernetes.pod.namespace: observability
@@ -772,6 +812,13 @@ backup:
   schedule: "30 2 * * *"          # daily 02:30
   timeZone: ""                    # IANA tz (K8s 1.27+); empty => cluster default (UTC)
   retentionDays: 14
+  # Wrap the run in `occ maintenance:mode --on/--off` so the DB dump and the
+  # files tar are ONE consistent point in time (the Nextcloud manual's
+  # recommendation). Trade-off: users get a 503 maintenance page for the length
+  # of the backup, so it's off by default — the live tar tolerates changed
+  # files and the matching-timestamp pair is consistent enough for most
+  # installs. Maintenance mode is re-disabled on every exit path (trap).
+  maintenanceMode: false
   concurrencyPolicy: Forbid
   activeDeadlineSeconds: 3600
   successfulJobsHistoryLimit: 3

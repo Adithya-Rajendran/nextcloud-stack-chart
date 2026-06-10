@@ -18,7 +18,11 @@
 #
 # Secrets created (names follow the chart's `existingSecret` convention):
 #   <release>-admin       keys: admin-user, admin-password
-#   <release>-postgres    keys: nextcloud-db-password
+#   <release>-postgres    keys: nextcloud-db-password (app role),
+#                               postgres-admin-password (the `postgres` superuser,
+#                               used by postgres.auth.manageAppRole). Re-running
+#                               this script PATCHES the admin key into an existing
+#                               Secret that predates it (chart <= 0.4 upgrade path).
 #   <release>-valkey      keys: valkey-password, valkey.conf
 #   <release>-whiteboard  keys: jwt-secret-key, redis-url   (only with --whiteboard)
 #   <release>-metrics     key:  token   (only with --metrics)
@@ -93,10 +97,25 @@ create_or_skip() {
   echo "[ok   ] Secret/$name created"
 }
 
+# Add a key to an EXISTING Secret if (and only if) it's missing — never touches
+# present values. Upgrade path for keys introduced after the Secret was created
+# (e.g. postgres-admin-password on installs bootstrapped with chart <= 0.4).
+ensure_secret_key() {
+  local name="$1" key="$2" file="$3" cur b64
+  secret_exists "$name" || return 0
+  cur="$(kubectl -n "$NAMESPACE" get secret "$name" -o jsonpath="{.data['$key']}" 2>/dev/null || true)"
+  [[ -n "$cur" ]] && return 0
+  b64="$(base64 < "$file" | tr -d '\n')"
+  kubectl -n "$NAMESPACE" patch secret "$name" --type=json \
+    -p "[{\"op\":\"add\",\"path\":\"/data/$key\",\"value\":\"$b64\"}]" >/dev/null
+  echo "[patch] Secret/$name: added missing key $key"
+}
+
 ensure_ns
 
 ADMIN_PW="$(gen_pw 32)"
 PG_PW="$(gen_pw 32)"
+PG_ADMIN_PW="$(gen_pw 32)"
 VALKEY_PW="$(gen_pw 32)"
 WB_JWT="$(gen_pw 48)"
 MET_TOKEN="$(gen_pw 48)"
@@ -127,6 +146,7 @@ chmod 700 "$TMP"
 printf "%s" "admin"         > "$TMP/admin-user"
 printf "%s" "$ADMIN_PW"     > "$TMP/admin-password"
 printf "%s" "$PG_PW"        > "$TMP/nextcloud-db-password"
+printf "%s" "$PG_ADMIN_PW"  > "$TMP/postgres-admin-password"
 printf "%s" "$VALKEY_PW"    > "$TMP/valkey-password"
 printf "%s" "$VALKEY_CONF"  > "$TMP/valkey.conf"
 
@@ -135,7 +155,10 @@ create_or_skip "${RELEASE}-admin" \
   --from-file=admin-password="$TMP/admin-password"
 
 create_or_skip "${RELEASE}-postgres" \
-  --from-file=nextcloud-db-password="$TMP/nextcloud-db-password"
+  --from-file=nextcloud-db-password="$TMP/nextcloud-db-password" \
+  --from-file=postgres-admin-password="$TMP/postgres-admin-password"
+# Chart <= 0.4 Secrets predate the admin key; add it without touching the rest.
+ensure_secret_key "${RELEASE}-postgres" postgres-admin-password "$TMP/postgres-admin-password"
 
 create_or_skip "${RELEASE}-valkey" \
   --from-file=valkey-password="$TMP/valkey-password" \

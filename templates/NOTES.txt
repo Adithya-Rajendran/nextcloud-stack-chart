@@ -61,17 +61,12 @@ NEXT STEPS
 
 4. First login:
 
-{{- if .Values.nextcloud.admin.existingSecret }}
    Username: from Secret/{{ .Values.nextcloud.admin.existingSecret }} key `admin-user`
    Password: from Secret/{{ .Values.nextcloud.admin.existingSecret }} key `admin-password`
 
    Read them:
      kubectl -n {{ .Release.Namespace }} get secret {{ .Values.nextcloud.admin.existingSecret }} \
        -o jsonpath='{.data.admin-password}' | base64 -d
-{{- else }}
-   Username: {{ .Values.nextcloud.admin.name }}
-   Password: stored in Secret/{{ include "nextcloud-stack.fullname" . }}-admin
-{{- end }}
 
    Rotate the password from the web UI immediately. Then enable TOTP/WebAuthn.
 
@@ -100,12 +95,33 @@ NEXT STEPS
 
 VERIFY CLUSTER ASSUMPTIONS
 --------------------------
-- networkPolicy.inClusterCidrs (currently {{ .Values.networkPolicy.inClusterCidrs }})
-  must cover BOTH the pod CIDR and the Service CIDR so in-cluster traffic stays
-  on the explicit per-Service rules. The RFC1918 default fits most clusters;
-  narrow it for tighter egress control. Find both with:
-    kubectl get nodes -o jsonpath='{.items[*].spec.podCIDR}'
-    kubectl cluster-info dump | grep -m1 service-cluster-ip-range
-- NetworkPolicies only enforce if your CNI supports them (Cilium, Calico, …).
+{{- if .Values.networkPolicy.enabled }}
+{{- if eq (.Values.networkPolicy.flavor | default "cilium") "cilium" }}
+- The rendered network policy is a CiliumNetworkPolicy (cilium.io/v2) and only
+  enforces on Cilium. On another policy-enforcing CNI set
+  networkPolicy.flavor=kubernetes for the standard-v1 rendering.
+{{- else }}
+- networkPolicy.flavor=kubernetes renders standard NetworkPolicy v1 with three
+  approximations (see templates/networkpolicy-v1.yaml): no Cilium-gateway
+  identity, "world" egress = everything outside RFC1918, and kubectl Jobs may
+  egress TCP 443/6443 anywhere (apiserver approximation).
+{{- if and .Values.gatewayApi.enabled (not .Values.networkPolicy.nextcloudIngressFrom) }}
+  ⚠  gatewayApi is enabled but networkPolicy.nextcloudIngressFrom is empty. The
+     v1 flavor cannot auto-allow a gateway proxy: add your gateway's pods to
+     nextcloudIngressFrom, or — on a CILIUM Gateway — use flavor=cilium.
+{{- end }}
+{{- end }}
+{{- else }}
+- ⚠  networkPolicy.enabled is FALSE — there is no default-deny around these
+  pods. PHP-FPM :9000, Postgres :5432 and Valkey :6379 are reachable from any
+  pod in the cluster unless you bring your own policy.
+{{- end }}
+{{- if and .Values.valkey.enabled (not .Values.valkey.auth.enabled) }}
+- ⚠  valkey.auth.enabled is FALSE — Valkey accepts UNAUTHENTICATED connections.
+  protected-mode does not apply once the server explicitly binds 0.0.0.0, so
+  anything that can reach the pod can read/write Nextcloud's cache, sessions
+  and file locks. Re-enable auth (scripts/bootstrap-secrets.sh creates the
+  Secret) unless network policy fully isolates the pod.
+{{- end }}
 
 See README.md for more.

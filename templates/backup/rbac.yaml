@@ -1,8 +1,10 @@
 {{- if .Values.backup.enabled }}
 {{/*
-Scoped identity for the backup CronJob: read Pods + exec into them (to run
-pg_dumpall / tar inside the live Pods). Namespace-local, minimum verbs.
-Requires the installer to have RBAC-create permission.
+Scoped identity for the backup CronJob and the (manually launched) restore Job:
+read Pods + exec into them (pg_dumpall / tar / occ inside the live Pods), plus
+scale + rollout-watch the Nextcloud Deployment — restore quiesces the app
+around the DB reload. Namespace-local, minimum verbs. Requires the installer
+to have RBAC-create permission.
 */}}
 apiVersion: v1
 kind: ServiceAccount
@@ -25,10 +27,17 @@ rules:
   - apiGroups: [""]
     resources: ["pods/exec"]
     verbs: ["create"]
-  # Resolve `kubectl exec deploy/<nextcloud>` to its Pod.
+  # Resolve `kubectl exec deploy/<nextcloud>` to its Pod; watch is for
+  # `kubectl rollout status` after the restore scales the app back up.
   - apiGroups: ["apps"]
     resources: ["deployments", "statefulsets"]
-    verbs: ["get", "list"]
+    verbs: ["get", "list", "watch"]
+  # Restore-mode's only write: scale the Nextcloud Deployment to 0 around the
+  # DB drop+reload (frees every connection), then back. `kubectl scale` reads
+  # then updates the scale subresource.
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale"]
+    verbs: ["get", "update", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

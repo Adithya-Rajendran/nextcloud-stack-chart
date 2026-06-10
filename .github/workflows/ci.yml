@@ -60,6 +60,75 @@ jobs:
           fi
           echo "OK: requireSecret fires correctly"
 
+      # Postgres privilege separation: the default render must bootstrap with
+      # the dedicated `postgres` superuser (admin Secret key) and manage the app
+      # role from the init container; reserved names must fail; the legacy
+      # opt-out must render the old single-role bootstrap.
+      - name: postgres app-role separation
+        run: |
+          helm template test . -f example-values.yaml > /tmp/approle.yaml
+          grep -q 'postgres-admin-password' /tmp/approle.yaml
+          grep -q 'app-role separation' /tmp/approle.yaml
+          if helm template test . -f example-values.yaml \
+              --set postgres.auth.username=postgres > /dev/null 2>&1; then
+            echo "FAIL: manageAppRole with app user 'postgres' should error"
+            exit 1
+          fi
+          if helm template test . -f example-values.yaml \
+              --set postgres.auth.database=postgres > /dev/null 2>&1; then
+            echo "FAIL: manageAppRole with app database 'postgres' should error"
+            exit 1
+          fi
+          helm template test . -f example-values.yaml \
+            --set postgres.auth.manageAppRole=false > /tmp/legacy.yaml
+          grep -q 'POSTGRES_DB' /tmp/legacy.yaml
+          if grep -q 'postgres-admin-password' /tmp/legacy.yaml; then
+            echo "FAIL: manageAppRole=false should not reference the admin key"
+            exit 1
+          fi
+          echo "OK: postgres app-role separation renders + guards fire"
+
+      # NetworkPolicy flavor: kubernetes must render v1 policies only (with
+      # v1-shaped IngressFrom peers), and an unknown flavor must abort render.
+      # All optional components are enabled so every conditional v1 policy
+      # block is exercised and schema-validated.
+      - name: networkPolicy flavor
+        run: |
+          helm template test . -f example-values.yaml \
+            --set networkPolicy.flavor=kubernetes \
+            --set-json 'networkPolicy.nextcloudIngressFrom=[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"ingress-nginx"}}}]' \
+            --set whiteboard.enabled=true --set whiteboard.auth.existingSecret=wb \
+            --set metrics.enabled=true --set metrics.auth.existingSecret=met \
+            --set backup.enabled=true \
+            --set ingress.enabled=false \
+            --set cloudflare.enabled=true --set cloudflare.tunnel.existingSecret=cf \
+            --set 'cloudflare.realIp.trustedCidrs={10.0.0.0/8}' \
+            > /tmp/np-v1.yaml
+          grep -q 'kind: NetworkPolicy' /tmp/np-v1.yaml
+          if grep -q 'CiliumNetworkPolicy' /tmp/np-v1.yaml; then
+            echo "FAIL: flavor=kubernetes must not render CiliumNetworkPolicy"; exit 1
+          fi
+          if helm template test . -f example-values.yaml \
+              --set networkPolicy.flavor=calico > /dev/null 2>&1; then
+            echo "FAIL: unknown networkPolicy.flavor should error"; exit 1
+          fi
+          echo "OK: networkPolicy flavor renders + guard fires"
+
+      # Regression test for the multi-replica guard: replicas > 1 on RWO PVCs
+      # must abort render (Multi-Attach deadlock); RWX on both PVCs must render.
+      - name: replicas guard
+        run: |
+          if helm template test . -f example-values.yaml \
+              --set nextcloud.replicas=2 > /dev/null 2>&1; then
+            echo "FAIL: render should error on replicas=2 with RWO PVCs"
+            exit 1
+          fi
+          helm template test . -f example-values.yaml \
+            --set nextcloud.replicas=2 \
+            --set 'nextcloud.persistence.webroot.accessModes={ReadWriteMany}' \
+            --set 'nextcloud.persistence.data.accessModes={ReadWriteMany}' > /dev/null
+          echo "OK: replicas guard fires correctly"
+
       # Render the exposure methods + Cloudflare addon + DHI overlay, and assert
       # their required-value guards fire. Outputs feed kubeconform below.
       - name: render exposure + addon variants
@@ -93,7 +162,38 @@ jobs:
           if grep -q 'dhi.io' /tmp/public.yaml; then
             echo "FAIL: values-public.yaml should leave no dhi.io references"; exit 1
           fi
+          # Full-feature render: covers the whiteboard / metrics / backup /
+          # ServiceMonitor templates, which no other variant renders.
+          helm template test . -f example-values.yaml \
+            --set ingress.enabled=false \
+            --set gatewayApi.enabled=true \
+            --set gatewayApi.parentRef.name=gw \
+            --set whiteboard.enabled=true \
+            --set whiteboard.auth.existingSecret=wb \
+            --set whiteboard.publicUrl=https://nextcloud.example.com \
+            --set metrics.enabled=true \
+            --set metrics.auth.existingSecret=met \
+            --set metrics.serviceMonitor.enabled=true \
+            --set backup.enabled=true > /tmp/full.yaml
+          for kind in 'component: whiteboard' 'component: metrics' 'component: backup' 'kind: ServiceMonitor'; do
+            grep -q "$kind" /tmp/full.yaml || { echo "FAIL: full render missing '$kind'"; exit 1; }
+          done
           echo "OK: exposure + addon variants render"
+
+      # When digest pins are committed (the pin-digests workflow opens PRs that
+      # create/refresh them), the pinned renders must stay valid too.
+      - name: render with digest pins (when present)
+        run: |
+          if [ -f pins.yaml ]; then
+            helm template test . -f example-values.yaml -f pins.yaml > /tmp/pinned.yaml
+            grep -q 'image: dhi.io/nginx@sha256:' /tmp/pinned.yaml
+            echo "OK: pins.yaml renders digest-pinned images"
+          fi
+          if [ -f pins-public.yaml ]; then
+            helm template test . -f example-values.yaml -f values-public.yaml -f pins-public.yaml > /tmp/pinned-public.yaml
+            grep -q '@sha256:' /tmp/pinned-public.yaml
+            echo "OK: pins-public.yaml renders digest-pinned images"
+          fi
 
       - name: Install kubeconform
         run: |
@@ -103,14 +203,18 @@ jobs:
           kubeconform -v
 
       # Schema-validate the rendered manifests against the K8s API. -strict
-      # rejects fields the schema doesn't know. -ignore-missing-schemas skips
-      # CRDs with no built-in schema (the Gateway API HTTPRoute).
+      # rejects fields the schema doesn't know. The CRDs-catalog location
+      # validates the CRD-based kinds too (CiliumNetworkPolicy, HTTPRoute,
+      # ServiceMonitor) — without it a malformed networkPolicy.*IngressFrom
+      # entry (e.g. v1 namespaceSelector syntax) sails through CI.
+      # -ignore-missing-schemas stays as a fallback for kinds in neither source.
       - name: kubeconform
         run: |
-          for f in /tmp/rendered.yaml /tmp/gw.yaml /tmp/cf.yaml /tmp/public.yaml; do
+          for f in /tmp/rendered.yaml /tmp/gw.yaml /tmp/cf.yaml /tmp/public.yaml /tmp/full.yaml /tmp/np-v1.yaml /tmp/legacy.yaml; do
             echo "== $f =="
             kubeconform -strict -ignore-missing-schemas -summary \
               -kubernetes-version 1.32.0 \
               -schema-location default \
+              -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
               "$f"
           done

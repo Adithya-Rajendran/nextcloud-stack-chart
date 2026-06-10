@@ -2,13 +2,13 @@ apiVersion: v2
 name: nextcloud-stack
 description: |
   Self-hosted Nextcloud stack — fpm + nginx in one Pod, Postgres, Valkey, and
-  optional ClamAV. Public images by default; expose via Ingress, Gateway API, or
-  the optional Cloudflare tunnel addon. A `helm upgrade` needs no out-of-chart
-  re-apply work.
+  optional ClamAV. Docker Hardened Images by default (public-image overlay
+  bundled); expose via Ingress, Gateway API, or the optional Cloudflare tunnel
+  addon. A `helm upgrade` needs no out-of-chart re-apply work.
 type: application
 
 # Chart version — bump on chart changes.
-version: 0.3.0
+version: 0.6.0
 
 # Pinned to the custom fpm image's Nextcloud version.
 # When bumping Nextcloud, bump this AND values.yaml `nextcloud.image.tag`.
@@ -35,13 +35,13 @@ dependencies: []
 annotations:
   # Bumped each time the *manifest* shape changes meaningfully.
   artifacthub.io/changes: |
+    - kind: security
+      description: Postgres privilege separation (postgres.auth.manageAppRole, default on) — Nextcloud now runs as a NOSUPERUSER role that owns only its database; the instance bootstraps with a dedicated `postgres` superuser, legacy installs are auto-migrated. UPGRADE NOTE - re-run scripts/bootstrap-secrets.sh first so the Secret gains the postgres-admin-password key
     - kind: added
-      description: Public-image overlay (values-public.yaml) for installs without a Docker Hardened Images subscription; DHI remains the default
+      description: networkPolicy.flavor=kubernetes — standard NetworkPolicy v1 rendering for non-Cilium CNIs (documented approximations for gateway identity, world egress, and apiserver egress); cilium remains the default
     - kind: added
-      description: Ingress and Gateway API (HTTPRoute) templates, both disabled by default
-    - kind: added
-      description: Optional Cloudflare addon (cloudflare.enabled) that can deploy cloudflared and switches real-IP handling to CF-Connecting-IP
+      description: Weekly pin-digests workflow that resolves every image tag to a digest and opens a PR updating pins.yaml / pins-public.yaml (needs DHI_USERNAME/DHI_TOKEN secrets); CI validates the pinned render when present
+    - kind: fixed
+      description: backup.sh now verifies the Postgres dump (gzip integrity + pg_dump completion trailer) instead of trusting pipe status, which masked failed dumps on shells without pipefail
     - kind: changed
-      description: Generic X-Forwarded-For real-IP trust by default; NetworkPolicy ingress is now a configurable source list (networkPolicy.nextcloudIngressFrom)
-    - kind: changed
-      description: De-personalized defaults — default StorageClass, RFC1918 in-cluster CIDRs, example.com placeholders
+      description: Backups now produce ONE self-contained archive per run (backup-<TS>.tar bundling a meta manifest, the pg_dumpall dump, and data/config/custom_apps/themes), and the same script gains MODE=restore — a one-shot Job that verifies the archive and restores files + database onto a fresh install, converging credentials to the current Secrets; opt-in backup.maintenanceMode freezes writes during the run; the backup Role additionally gets deployments/scale for the restore quiesce

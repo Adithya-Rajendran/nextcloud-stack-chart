@@ -1,47 +1,286 @@
 #!/bin/sh
-# Backs up Postgres (pg_dumpall) + the Nextcloud data/config to /backup (a PVC,
-# e.g. off-cluster NFS). Runs as a non-root CronJob that `kubectl exec`s into the
-# live Pods, so it never multi-attaches the RWO PVCs. Dynamic values come from
-# env (set by the CronJob): PG_POD, NC_DEPLOY, BACKUP_NS, PG_ENABLED,
-# RETENTION_DAYS.
+# Backup AND restore for the nextcloud-stack chart — one script, two modes,
+# one self-contained artifact per backup run:
+#
+#   /backup/backup-<TS>.tar            (uncompressed outer tar)
+#     ├── nextcloud-backup.meta        KEY=VALUE manifest (format, ts, db, …)
+#     ├── pg.sql.gz                    pg_dumpall | gzip   (when PG_ENABLED)
+#     └── files.tar.gz                 data/ config/ custom_apps/ themes/
+#
+# MODE=backup (default — the CronJob's schedule runs this).
+#
+# MODE=restore — disaster recovery onto a FRESH INSTALL of the chart (same or
+#   different cluster/release): install the chart + Secrets, attach the backup
+#   PVC, then launch a one-shot Job cloned from the CronJob with
+#   MODE=restore and RESTORE_ARCHIVE=<backup-<TS>.tar | latest> injected
+#   (copy-paste command in docs/backup-and-restore.md). The restore:
+#     1. verifies the archive end-to-end BEFORE touching anything;
+#     2. streams files.tar.gz into the live php container (data/, config/,
+#        custom_apps/, themes/);
+#     3. converges the restored config.php to the CURRENT env/Secrets
+#        (dbpassword/dbuser/dbhost/dbname) — the fresh install's passwords
+#        stay valid, and the manageAppRole password sync stays consistent;
+#     4. scales Nextcloud to 0, drops the DB, reloads the dump, and resets
+#        the role passwords to the current Secrets in the SAME psql session;
+#     5. scales back up, lifts maintenance mode, bumps the data fingerprint
+#        (so desktop/mobile clients resync) and reconciles with files:scan.
+#   USER ACCOUNTS come from the backup: log in with the OLD instance's admin
+#   credentials, not the fresh install's bootstrap password.
+#
+# Both modes `kubectl exec` into the live Pods rather than mounting the RWO
+# PVCs (a second mount would Multi-Attach). No secret ever appears in a
+# command argument — credentials travel via pod env or stdin only.
+#
+# Env (set by the CronJob): BACKUP_NS, NC_DEPLOY, PG_POD, PG_ENABLED, PG_DB,
+# RETENTION_DAYS, MAINTENANCE_MODE; restore adds MODE, RESTORE_ARCHIVE.
 set -u
-set -o pipefail 2>/dev/null || true
+# pipefail where the shell has it (busybox ash, bash); content-based
+# verification below covers shells that don't. The subshell PROBE matters: a
+# failed bare `set -o pipefail` is a special-builtin error that ABORTS some
+# POSIX shells (dash) even with `|| true` — with exit status 0, i.e. a job
+# that "succeeds" having done nothing.
+(set -o pipefail) 2>/dev/null && set -o pipefail || true
 export HOME=/tmp
-TS=$(date -u +%Y%m%d-%H%M%S)
-PGDIR=/backup/postgres
-NCDIR=/backup/nextcloud
-mkdir -p "$PGDIR" "$NCDIR"
-echo "[$(date -u)] === backup $TS start ==="
 
-# ---- Postgres: pg_dumpall is a single consistent snapshot -------------------
-if [ "${PG_ENABLED:-true}" = "true" ]; then
-  echo "[$(date -u)] postgres dump -> pg-$TS.sql.gz"
-  if kubectl exec -n "$BACKUP_NS" "$PG_POD" -c postgres -- \
-       sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_dumpall -U "$POSTGRES_USER" -h 127.0.0.1' \
-       | gzip > "$PGDIR/pg-$TS.sql.gz.tmp" && [ -s "$PGDIR/pg-$TS.sql.gz.tmp" ]; then
-    mv "$PGDIR/pg-$TS.sql.gz.tmp" "$PGDIR/pg-$TS.sql.gz"
-    echo "  ok: $(ls -lh "$PGDIR/pg-$TS.sql.gz" | awk '{print $5}')"
-  else
-    rm -f "$PGDIR/pg-$TS.sql.gz.tmp"; echo "  POSTGRES BACKUP FAILED" >&2; exit 1
+BACKUP_ROOT=/backup
+MODE="${MODE:-backup}"
+
+log()  { echo "[$(date -u '+%Y-%m-%d %H:%M:%S')] $*"; }
+fail() { echo "ERROR: $*" >&2; exit 1; }
+occ()  { kubectl exec -n "$BACKUP_NS" "deploy/$NC_DEPLOY" -c php -- php /var/www/html/occ "$@"; }
+# psql/dropdb inside the postgres Pod, authenticated with ITS env (admin under
+# manageAppRole, the app user under the legacy layout). Secrets stay in env.
+pgexec() { kubectl exec -i -n "$BACKUP_NS" "$PG_POD" -c postgres -- sh -c "PGPASSWORD=\"\$POSTGRES_PASSWORD\" $*"; }
+# Run one scalar SQL query in the postgres Pod (SQL is built LOCALLY, with
+# qlit-quoted literals, then runs remotely against the maintenance DB).
+pgsql_scalar() { pgexec "psql -U \"\$POSTGRES_USER\" -h 127.0.0.1 -d postgres -qAtc \"$1\"" </dev/null; }
+# SQL quoting for identifiers / literals built outside the database.
+qid()  { printf '"%s"' "$(printf '%s' "$1" | sed 's/"/""/g')"; }
+qlit() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/''/g")"; }
+
+# ---- maintenance-mode plumbing (used by both modes) --------------------------
+MM_ON=0
+mm_off() {
+  if [ "$MM_ON" = 1 ]; then
+    occ maintenance:mode --off || echo "WARNING: failed to disable maintenance mode — run 'occ maintenance:mode --off' manually" >&2
+    MM_ON=0
   fi
-fi
+}
+mm_on() {
+  log "enabling maintenance mode"
+  if occ maintenance:mode --on; then MM_ON=1; else fail "could not enable maintenance mode"; fi
+}
 
-# ---- Nextcloud data + config (live tar; tar rc 1 = file changed, tolerated) --
-# Exclude lost+found: it's the root-owned ext4 volume-root artifact, not app data,
-# and restoring it trips a harmless-but-noisy "Cannot change mode" chmod error.
-echo "[$(date -u)] nextcloud data/config tar -> files-$TS.tar.gz"
-rc=0
-kubectl exec -n "$BACKUP_NS" "deploy/$NC_DEPLOY" -c php -- \
-  tar czf - --ignore-failed-read --exclude='lost+found' -C /var/www/html data config \
-  > "$NCDIR/files-$TS.tar.gz.tmp" || rc=$?
-if [ "$rc" -le 1 ] && [ -s "$NCDIR/files-$TS.tar.gz.tmp" ]; then
-  mv "$NCDIR/files-$TS.tar.gz.tmp" "$NCDIR/files-$TS.tar.gz"
-  echo "  ok (tar rc=$rc): $(ls -lh "$NCDIR/files-$TS.tar.gz" | awk '{print $5}')"
-else
-  rm -f "$NCDIR/files-$TS.tar.gz.tmp"; echo "  NEXTCLOUD DATA BACKUP FAILED (rc=$rc)" >&2; exit 1
-fi
+# ==============================================================================
+# MODE=backup
+# ==============================================================================
+do_backup() {
+  TS=$(date -u +%Y%m%d-%H%M%S)
+  STAGE="$BACKUP_ROOT/.work-$TS"
+  log "=== backup $TS start ==="
 
-# ---- Retention --------------------------------------------------------------
-find "$PGDIR" -name 'pg-*.sql.gz'    -mtime +"${RETENTION_DAYS:-14}" -delete 2>/dev/null || true
-find "$NCDIR" -name 'files-*.tar.gz' -mtime +"${RETENTION_DAYS:-14}" -delete 2>/dev/null || true
-echo "[$(date -u)] === backup $TS OK ==="
+  # Stale stage dirs from crashed runs (>1 day old).
+  for d in $(find "$BACKUP_ROOT" -maxdepth 1 -type d -name '.work-*' -mmin +1440 2>/dev/null); do
+    log "pruning stale stage $d"; rm -rf "$d"
+  done
+  mkdir -p "$STAGE"
+
+  if [ "${MAINTENANCE_MODE:-false}" = "true" ]; then
+    trap mm_off EXIT
+    mm_on
+  fi
+
+  # ---- Postgres: pg_dumpall is a single consistent snapshot -----------------
+  # Verification is content-based, NOT pipe-status-based: without pipefail a
+  # failed pg_dumpall still leaves a small valid gzip from the empty stream. A
+  # complete dump always ends with pg_dump's "PostgreSQL database dump
+  # complete" trailer; gzip integrity + that trailer catch auth failures,
+  # truncation and masked kubectl errors regardless of shell semantics.
+  if [ "${PG_ENABLED:-true}" = "true" ]; then
+    log "postgres dump -> pg.sql.gz"
+    pgexec 'pg_dumpall -U "$POSTGRES_USER" -h 127.0.0.1' </dev/null | gzip > "$STAGE/pg.sql.gz" || true
+    if [ -s "$STAGE/pg.sql.gz" ] && gzip -t "$STAGE/pg.sql.gz" 2>/dev/null \
+       && zcat "$STAGE/pg.sql.gz" | tail -c 4096 | grep -q 'PostgreSQL database dump complete'; then
+      log "  ok: $(ls -lh "$STAGE/pg.sql.gz" | awk '{print $5}')"
+    else
+      rm -rf "$STAGE"; fail "postgres dump failed (missing trailer or corrupt gzip)"
+    fi
+  fi
+
+  # ---- Nextcloud files (live tar; tar rc 1 = file changed, tolerated) -------
+  # Members: data/ (user files — the data PVC) and config/ (config.php
+  # secrets) always; custom_apps/ (store-installed apps — the writable
+  # apps_paths entry in the upstream image) and themes/ when present. Core
+  # code is NOT backed up — the image provides it. lost+found is the
+  # root-owned ext4 volume-root artifact, not app data.
+  log "nextcloud files tar -> files.tar.gz"
+  rc=0
+  kubectl exec -n "$BACKUP_NS" "deploy/$NC_DEPLOY" -c php -- \
+    sh -c 'cd /var/www/html && dirs="data config"; for d in custom_apps themes; do [ -d "$d" ] && dirs="$dirs $d"; done; tar czf - --ignore-failed-read --exclude="lost+found" $dirs' \
+    > "$STAGE/files.tar.gz" || rc=$?
+  if [ "$rc" -le 1 ] && [ -s "$STAGE/files.tar.gz" ] && gzip -t "$STAGE/files.tar.gz" 2>/dev/null; then
+    log "  ok (tar rc=$rc): $(ls -lh "$STAGE/files.tar.gz" | awk '{print $5}')"
+  else
+    rm -rf "$STAGE"; fail "nextcloud files tar failed (rc=$rc)"
+  fi
+
+  # Artifacts captured — lift maintenance mode before local-only bundling.
+  mm_off
+
+  # ---- bundle into ONE archive ----------------------------------------------
+  {
+    echo "format=1"
+    echo "ts=$TS"
+    echo "db=${PG_DB:-nextcloud}"
+    echo "pg=${PG_ENABLED:-true}"
+    echo "deploy=$NC_DEPLOY"
+    echo "maintenance_mode=${MAINTENANCE_MODE:-false}"
+  } > "$STAGE/nextcloud-backup.meta"
+  members="nextcloud-backup.meta files.tar.gz"
+  [ -f "$STAGE/pg.sql.gz" ] && members="nextcloud-backup.meta pg.sql.gz files.tar.gz"
+  log "bundling -> backup-$TS.tar"
+  if tar cf "$BACKUP_ROOT/backup-$TS.tar.tmp" -C "$STAGE" $members \
+     && tar tf "$BACKUP_ROOT/backup-$TS.tar.tmp" >/dev/null; then
+    mv "$BACKUP_ROOT/backup-$TS.tar.tmp" "$BACKUP_ROOT/backup-$TS.tar"
+    rm -rf "$STAGE"
+    log "  ok: $(ls -lh "$BACKUP_ROOT/backup-$TS.tar" | awk '{print $5}')"
+  else
+    rm -f "$BACKUP_ROOT/backup-$TS.tar.tmp"; rm -rf "$STAGE"
+    fail "bundling failed (is the backup PVC large enough for ~2x one run?)"
+  fi
+
+  # ---- Retention (new single-archive layout + pre-0.6 pair layout) ----------
+  find "$BACKUP_ROOT" -maxdepth 1 -name 'backup-*.tar' -mtime +"${RETENTION_DAYS:-14}" -delete 2>/dev/null || true
+  find "$BACKUP_ROOT/postgres"  -name 'pg-*.sql.gz'    -mtime +"${RETENTION_DAYS:-14}" -delete 2>/dev/null || true
+  find "$BACKUP_ROOT/nextcloud" -name 'files-*.tar.gz' -mtime +"${RETENTION_DAYS:-14}" -delete 2>/dev/null || true
+  log "=== backup $TS OK ==="
+}
+
+# ==============================================================================
+# MODE=restore
+# ==============================================================================
+meta_get() { grep "^$1=" "$2" 2>/dev/null | head -1 | cut -d= -f2-; }
+
+do_restore() {
+  [ -n "${RESTORE_ARCHIVE:-}" ] || fail "MODE=restore requires RESTORE_ARCHIVE=<backup-<TS>.tar or 'latest'>"
+  if [ "$RESTORE_ARCHIVE" = "latest" ]; then
+    ARCHIVE=$(ls -t "$BACKUP_ROOT"/backup-*.tar 2>/dev/null | head -1)
+    [ -n "$ARCHIVE" ] || fail "no backup-*.tar archives found in $BACKUP_ROOT"
+  else
+    ARCHIVE="$BACKUP_ROOT/$RESTORE_ARCHIVE"
+  fi
+  [ -f "$ARCHIVE" ] || fail "archive not found: $ARCHIVE"
+  log "=== restore from $(basename "$ARCHIVE") ==="
+
+  # ---- 1. verify the WHOLE archive before mutating anything ------------------
+  META=/tmp/nextcloud-backup.meta
+  tar -xOf "$ARCHIVE" nextcloud-backup.meta > "$META" 2>/dev/null || fail "archive has no nextcloud-backup.meta (pre-0.6 pair-layout backups: use the manual guide in docs/restore.md)"
+  [ "$(meta_get format "$META")" = "1" ] || fail "unsupported archive format '$(meta_get format "$META")'"
+  ARC_DB=$(meta_get db "$META"); ARC_PG=$(meta_get pg "$META")
+  log "archive: ts=$(meta_get ts "$META") db=$ARC_DB pg=$ARC_PG"
+  RESTORE_PG=false
+  if [ "${PG_ENABLED:-true}" = "true" ] && [ "$ARC_PG" = "true" ]; then
+    RESTORE_PG=true
+    [ "$ARC_DB" = "${PG_DB:-nextcloud}" ] || fail "archive db '$ARC_DB' != chart db '${PG_DB:-nextcloud}' — cross-database-name restores are not supported"
+    log "verifying pg.sql.gz"
+    tar -xOf "$ARCHIVE" pg.sql.gz | zcat 2>/dev/null | tail -c 4096 | grep -q 'PostgreSQL database dump complete' \
+      || fail "pg.sql.gz is corrupt or truncated — refusing to restore"
+  elif [ "$ARC_PG" = "true" ]; then
+    log "WARNING: archive contains a DB dump but postgres.enabled=false — restoring FILES ONLY"
+  fi
+  log "verifying files.tar.gz"
+  tar -xOf "$ARCHIVE" files.tar.gz | gzip -t 2>/dev/null || fail "files.tar.gz is corrupt — refusing to restore"
+
+  # ---- 2. capture the CURRENT credentials from the live pod envs -------------
+  # (also proves both pods are up before we start). The restored config.php and
+  # the reloaded DB roles are converged to THESE values, so the Secrets the
+  # fresh install was bootstrapped with stay authoritative.
+  CUR_APP_USER=$(kubectl exec -n "$BACKUP_NS" "deploy/$NC_DEPLOY" -c php -- printenv POSTGRES_USER) || fail "cannot read app DB user from the nextcloud pod"
+  CUR_APP_PW=$(kubectl exec -n "$BACKUP_NS" "deploy/$NC_DEPLOY" -c php -- printenv POSTGRES_PASSWORD) || fail "cannot read app DB password from the nextcloud pod"
+  if [ "$RESTORE_PG" = "true" ]; then
+    CUR_PG_USER=$(kubectl exec -n "$BACKUP_NS" "$PG_POD" -c postgres -- printenv POSTGRES_USER) || fail "cannot read bootstrap user from the postgres pod"
+    CUR_PG_PW=$(kubectl exec -n "$BACKUP_NS" "$PG_POD" -c postgres -- printenv POSTGRES_PASSWORD) || fail "cannot read bootstrap password from the postgres pod"
+  fi
+
+  trap 'echo "RESTORE FAILED — the site may be in maintenance mode or scaled down; see docs/restore.md before retrying" >&2' EXIT
+  mm_on
+
+  # ---- 3. files: stream straight out of the archive into the php container ---
+  # The remote tar gunzips as it reads, so a truncated stream fails the exec
+  # (rc != 0) even on shells without pipefail. rc=1 = file-changed, tolerated.
+  log "restoring files (data/ config/ custom_apps/ themes/)"
+  rc=0
+  tar -xOf "$ARCHIVE" files.tar.gz | kubectl exec -i -n "$BACKUP_NS" "deploy/$NC_DEPLOY" -c php -- \
+    tar xzf - --no-overwrite-dir --no-same-owner -C /var/www/html || rc=$?
+  [ "$rc" -le 1 ] || fail "files restore failed (rc=$rc)"
+
+  # ---- 4. converge restored config.php to the CURRENT env/Secrets ------------
+  # The backup's config.php carries the OLD dbpassword/dbhost. Left alone it
+  # would break either immediately (different release name) or on the next pod
+  # start (manageAppRole syncs the role password to the current Secret).
+  # instanceid/secret/passwordsalt are deliberately untouched — they key the
+  # restored data. maintenance is cleared; occ confirms it again at the end.
+  log "converging restored config.php to current env"
+  kubectl exec -n "$BACKUP_NS" "deploy/$NC_DEPLOY" -c php -- php -r '
+    $f = "/var/www/html/config/config.php";
+    require $f;
+    $CONFIG["dbpassword"]  = getenv("POSTGRES_PASSWORD");
+    $CONFIG["dbuser"]      = getenv("POSTGRES_USER");
+    $CONFIG["dbhost"]      = getenv("POSTGRES_HOST");
+    $CONFIG["dbname"]      = getenv("POSTGRES_DB");
+    $CONFIG["maintenance"] = false;
+    if (file_put_contents($f, "<?php\n\$CONFIG = " . var_export($CONFIG, true) . ";\n") === false) { exit(1); }
+    echo "config.php converged\n";' || fail "config.php convergence failed"
+
+  if [ "$RESTORE_PG" = "true" ]; then
+    # ---- 5. quiesce the app (frees every DB connection) ----------------------
+    ORIG_REPLICAS=$(kubectl get deploy -n "$BACKUP_NS" "$NC_DEPLOY" -o jsonpath='{.spec.replicas}' 2>/dev/null)
+    [ -n "$ORIG_REPLICAS" ] && [ "$ORIG_REPLICAS" -ge 1 ] 2>/dev/null || ORIG_REPLICAS=1
+    log "scaling deploy/$NC_DEPLOY 0 (was $ORIG_REPLICAS)"
+    kubectl scale -n "$BACKUP_NS" "deploy/$NC_DEPLOY" --replicas=0 || fail "scale to 0 failed"
+    CONN_SQL="SELECT count(*) FROM pg_stat_activity WHERE datname = $(qlit "$ARC_DB")"
+    i=0
+    while [ "$(pgsql_scalar "$CONN_SQL" 2>/dev/null || echo 1)" != "0" ]; do
+      i=$((i+1)); [ "$i" -le 60 ] || break   # dropdb --force terminates stragglers
+      sleep 2
+    done
+
+    # ---- 6. drop + reload, resetting role passwords in the SAME session ------
+    # pg_dumpall's ALTER ROLE statements would reset both roles to the OLD
+    # passwords mid-reload; the epilogue (same already-authenticated session)
+    # converges them back to the current Secrets before anything reconnects.
+    # "role … already exists" errors during the reload are expected.
+    log "dropping database $ARC_DB"
+    pgexec "dropdb -U \"\$POSTGRES_USER\" -h 127.0.0.1 --if-exists --force $(qid "$ARC_DB")" </dev/null || fail "dropdb failed"
+    log "reloading dump (role-exists errors are expected)"
+    {
+      tar -xOf "$ARCHIVE" pg.sql.gz | zcat
+      printf '\n'
+      printf 'ALTER ROLE %s WITH PASSWORD %s;\n' "$(qid "$CUR_PG_USER")" "$(qlit "$CUR_PG_PW")"
+      printf 'ALTER ROLE %s WITH PASSWORD %s;\n' "$(qid "$CUR_APP_USER")" "$(qlit "$CUR_APP_PW")"
+    } | pgexec 'psql -q -U "$POSTGRES_USER" -h 127.0.0.1 -d postgres' || fail "dump reload failed"
+    EXISTS_SQL="SELECT count(*) FROM pg_database WHERE datname = $(qlit "$ARC_DB")"
+    [ "$(pgsql_scalar "$EXISTS_SQL")" = "1" ] || fail "database $ARC_DB missing after reload"
+
+    # ---- 7. bring the app back ------------------------------------------------
+    log "scaling deploy/$NC_DEPLOY back to $ORIG_REPLICAS"
+    kubectl scale -n "$BACKUP_NS" "deploy/$NC_DEPLOY" --replicas="$ORIG_REPLICAS" || fail "scale up failed"
+    kubectl rollout status -n "$BACKUP_NS" "deploy/$NC_DEPLOY" --timeout=600s || fail "nextcloud did not become ready after restore"
+  fi
+
+  # ---- 8. reconcile -----------------------------------------------------------
+  occ maintenance:mode --off || true
+  MM_ON=0
+  # New data fingerprint tells desktop/mobile clients the server state changed.
+  occ maintenance:data-fingerprint || log "WARNING: maintenance:data-fingerprint failed — run it manually"
+  occ files:scan --all || log "WARNING: files:scan --all failed or timed out — run it manually"
+  occ status || true
+  trap - EXIT
+  log "=== restore OK — log in with the BACKED-UP instance's credentials (not the fresh install's bootstrap password) ==="
+}
+
+case "$MODE" in
+  backup)  do_backup ;;
+  restore) do_restore ;;
+  *) fail "unknown MODE '$MODE' (backup|restore)" ;;
+esac

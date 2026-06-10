@@ -12,7 +12,10 @@ and the few things **you** are responsible for.
 - **Restricted PodSecurity** compatible — `runAsNonRoot`, `readOnlyRootFilesystem`
   where possible, `drop: ["ALL"]`, `seccompProfile: RuntimeDefault` on every
   container.
-- **Default-deny NetworkPolicy** (Cilium) with per-component allows.
+- **Default-deny NetworkPolicy** with per-component allows (Cilium dialect by
+  default; standard-v1 flavor for other CNIs).
+- **No DB superuser for the app** — Nextcloud runs as a `NOSUPERUSER` role that
+  owns only its database.
 - **External-only secrets** — nothing sensitive in `values.yaml` or Helm metadata.
 - **Digest pinning** available for every image.
 - **Least privilege** for the Jobs that touch the K8s API (`pods/exec` only).
@@ -39,6 +42,55 @@ You lose the hardened base but keep every other control below.
 Tags move; digests don't. `./scripts/pin-digests.sh > pins.yaml` resolves every
 image to its current digest; apply with an extra `-f pins.yaml`. Re-run to adopt
 updates deliberately, review the diff, and upgrade.
+
+The `Refresh image digest pins` workflow automates the re-run: weekly (or on
+demand) it resolves every tag and opens a PR updating `pins.yaml` /
+`pins-public.yaml` — merging the PR is the deliberate adoption step. It needs
+`DHI_USERNAME` / `DHI_TOKEN` Actions secrets for dhi.io. CI re-validates the
+pinned render once the files exist.
+
+---
+
+## Database privilege separation
+
+`postgres.auth.manageAppRole` (default **on**) keeps Nextcloud off the database
+superuser: the instance bootstraps with a dedicated `postgres` superuser (key
+`postgres-admin-password` in the postgres Secret), and the `wait-for-postgres`
+init container — which runs **before** PHP-FPM on every pod start — idempotently
+ensures the app role:
+
+- exists, with the password from `nextcloud-db-password` (rotation = rotate the
+  Secret, restart the pod);
+- is `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`;
+- **owns** its database (ownership grants `CREATE` on the `public` schema on
+  Postgres 15+, so installs and `occ` migrations keep working — Nextcloud's own
+  installer code documents this exact model and needs no superuser).
+
+Why it matters: as a superuser, an app-level SQL injection escalates to code
+execution in the postgres container via `COPY FROM PROGRAM`. As a plain DB
+owner, it's contained to the app's own data.
+
+**Upgrading an existing install** (chart ≤ 0.4 bootstrapped the app user *as*
+the superuser): re-run `scripts/bootstrap-secrets.sh` first — it patches the
+missing `postgres-admin-password` key into the existing Secret without touching
+other keys. Skipping that leaves pods in `CreateContainerConfigError` (missing
+Secret key) until you add it. On the next pod start the init container detects
+the legacy layout and creates the `postgres` admin role using the app user's
+still-super credentials. Then:
+
+- **PostgreSQL ≤ 15** data dirs: the app role is demoted in place — done.
+- **PostgreSQL 16+** (the chart's defaults: DHI 18, public overlay 17)
+  *refuses to demote the cluster's bootstrap role*. The init container applies
+  everything else (admin role, password sync, ownership, `REVOKE … FROM
+  PUBLIC`), warns in its log, and continues — the install keeps working with
+  the app-as-superuser status quo. Full separation on such a data dir requires
+  a rebuild: take a backup, delete the postgres PVC, let the chart re-bootstrap
+  (fresh initdb as `postgres`), restore — see
+  [Backup & Restore](backup-and-restore.md). New installs get full separation
+  from day one.
+
+Set `postgres.auth.manageAppRole: false` to keep the legacy single-superuser
+layout entirely (discouraged).
 
 ---
 
@@ -82,19 +134,34 @@ What it allows:
 | Nextcloud | gateway (`fromEntities: [ingress]` when `gatewayApi.enabled`), Cloudflare source, `nextcloudIngressFrom`, the metrics exporter | DNS, Postgres, Valkey, ClamAV, Whiteboard, `world` (if `allowAllEgress`) |
 | Postgres / Valkey / ClamAV | Nextcloud only | DNS (+ `world` for ClamAV signatures) |
 | Metrics exporter | `metricsIngressFrom` (your Prometheus ns) | DNS, Nextcloud |
+| occ Jobs (cron, db-migrate) | — | kube-apiserver, DNS |
 | backup Job | — | kube-apiserver, DNS |
+
+The default-deny selects **this release's pods only** (by the release selector
+labels), so unrelated workloads sharing the namespace are never caught by it.
 
 Public egress uses Cilium's identity-based **`world`** entity (everything outside
 the cluster) — no CIDR list to maintain.
 
-### Why Cilium specifically
+### Why Cilium is the default flavor
 
-The Gateway API path needs `fromEntities: [ingress]` to allow the gateway proxy's
-reserved identity, which standard NetworkPolicy v1 **cannot express** — a
-Gateway-fronted install would silently `503`. So the chart commits to Cilium.
+The Cilium Gateway path needs `fromEntities: [ingress]` to allow the gateway
+proxy's reserved identity, which standard NetworkPolicy v1 **cannot express** —
+a Cilium-Gateway-fronted install would silently `503`. Cilium also gives
+identity-based `world` and `kube-apiserver` entities instead of CIDR
+approximations.
 
-**On a non-Cilium CNI:** set `networkPolicy.enabled: false` and bring your own
-equivalent policy — otherwise every control above is silently gone.
+**On a non-Cilium CNI:** set `networkPolicy.flavor: kubernetes`. The chart then
+renders standard `networking.k8s.io/v1` policies with the same default-deny +
+per-component structure and three documented approximations: no gateway
+identity (add your gateway/ingress-controller pods to `nextcloudIngressFrom` —
+they're ordinary pods on every implementation except the Cilium Gateway),
+"world" egress ≈ everything outside RFC1918/link-local, and kubectl-Job egress ≈
+TCP 443/6443 anywhere (the apiserver has no selectable v1 identity). With the
+`kubernetes` flavor, the `*IngressFrom` lists take v1 `NetworkPolicyPeer`
+objects (`namespaceSelector`/`podSelector`/`ipBlock`) instead of Cilium
+selectors. Disabling the policy outright (`networkPolicy.enabled: false`) means
+every control above is silently gone.
 
 ### Extra ingress sources
 
@@ -126,7 +193,7 @@ The expected Secrets and keys:
 | Secret | Keys | Required |
 |---|---|---|
 | `<release>-admin` | `admin-user`, `admin-password` | always |
-| `<release>-postgres` | `nextcloud-db-password` | always |
+| `<release>-postgres` | `nextcloud-db-password`, `postgres-admin-password` (the latter when `manageAppRole`, the default) | always |
 | `<release>-valkey` | `valkey-password`, `valkey.conf` | when `valkey.enabled` |
 | `<release>-whiteboard` | `jwt-secret-key`, `redis-url` | when `whiteboard.enabled` |
 | `<release>-metrics` | `token` | when `metrics.enabled` |
@@ -157,8 +224,9 @@ The chart hardens the stack, but **you** own:
 - **`nextcloud.web.realIp.trustedCidrs`** — the one cluster-specific value. With
   `recursive: true`, it must cover every proxy hop, and those hops must append to
   the header.
-- **The CNI.** No Cilium ⇒ no NetworkPolicy ⇒ the controls above are gone unless
-  you replace them.
+- **The CNI.** The policy only enforces if the CNI does: `flavor: cilium` needs
+  Cilium; `flavor: kubernetes` needs any v1-policy-enforcing CNI. On a CNI that
+  enforces nothing, the controls above are silently gone.
 - **TLS at the front door** — the chart doesn't issue certs.
 - **Secret storage** — keep the source Secrets (and any password manager copy)
   safe; rotate on exposure.

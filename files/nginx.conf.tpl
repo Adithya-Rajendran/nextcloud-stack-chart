@@ -180,7 +180,20 @@ http {
 
         location ~ \.(?:css|js|mjs|svg|gif|png|jpg|ico|wasm|tflite|map|ogg|flac)$ {
             try_files $uri /index.php$request_uri;
+            # nginx add_header inheritance: ANY add_header in a location cancels
+            # ALL add_header directives inherited from the server block, so the
+            # security headers must be repeated here (the upstream recipe does
+            # exactly this). Without them, static responses — including
+            # user-uploadable SVG — ship without nosniff/X-Frame-Options.
             add_header Cache-Control "public, max-age=15778463$asset_immutable";
+            add_header Referrer-Policy                   "no-referrer"       always;
+            add_header X-Content-Type-Options            "nosniff"           always;
+            add_header X-Frame-Options                   "SAMEORIGIN"        always;
+            add_header X-Permitted-Cross-Domain-Policies "none"              always;
+            add_header X-Robots-Tag                      "noindex, nofollow" always;
+{{- if .Values.nextcloud.web.httpsBehindProxy }}
+            add_header Strict-Transport-Security "max-age=15552000; includeSubDomains" always;
+{{- end }}
             access_log off;
 
             location ~ \.wasm$ {
