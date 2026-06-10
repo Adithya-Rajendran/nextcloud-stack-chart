@@ -28,12 +28,16 @@ fromEntities / fromCIDRSet), e.g.
 
 # ---- catch-all default-deny -------------------------------------------------
 # Selects every pod of THIS RELEASE (scoped by the release selector labels —
-# never unrelated workloads sharing the namespace). Empty ingress + egress
-# arrays select these endpoints for enforcement with ZERO allows = default-deny
-# in both directions; the per-component policies below union in the allows (so
-# this also supplies the egress-deny for the ingress-only component policies).
-# The kubectl Jobs (cron, db-migrate) carry the release labels too, so they are
-# enforced as well — their explicit kube-apiserver allow is further down.
+# never unrelated workloads sharing the namespace). Each direction carries one
+# EMPTY rule ({}): unlike NetworkPolicy v1, an empty CNP rule matches NO
+# traffic — it only satisfies the "rule must have at least one of Ingress,
+# IngressDeny, Egress, EgressDeny" validation and flips the selected endpoints
+# into per-direction default-deny. (Empty ARRAYS `ingress: []` are rejected by
+# Cilium ≥1.19 with Valid=False and silently unenforced.) The per-component
+# policies below union in the allows (so this also supplies the egress-deny for
+# the ingress-only component policies). The kubectl Jobs (cron, db-migrate)
+# carry the release labels too, so they are enforced as well — their explicit
+# kube-apiserver allow is further down.
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
@@ -44,8 +48,15 @@ spec:
   endpointSelector:
     matchLabels:
       {{- include "nextcloud-stack.selectorLabels" . | nindent 6 }}
-  ingress: []
-  egress: []
+  # default-deny is already Cilium's default for selected endpoints; spelled
+  # out for self-documentation.
+  enableDefaultDeny:
+    ingress: true
+    egress: true
+  ingress:
+    - {}
+  egress:
+    - {}
 
 ---
 # ---- Nextcloud: ingress from configured sources + gateway; egress to deps -----
