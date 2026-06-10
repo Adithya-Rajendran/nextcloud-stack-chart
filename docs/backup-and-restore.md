@@ -20,14 +20,20 @@ backup:
     # storageClassName: nfs-csi-retain
 ```
 
-On each run the CronJob writes two artifacts to the backup PVC:
+Each run produces **one self-contained archive** on the backup PVC —
+`backup-<TS>.tar` (`<TS>` = `YYYYMMDD-HHMMSS` UTC), an uncompressed tar of:
 
-| File | Contents | Made with |
+| Member | Contents | Made with |
 |---|---|---|
-| `postgres/pg-<TS>.sql.gz` | the **whole** Postgres cluster | `pg_dumpall` + gzip |
-| `nextcloud/files-<TS>.tar.gz` | `data/` (user files), `config/`, plus `custom_apps/` and `themes/` when present | live `tar` + gzip |
+| `nextcloud-backup.meta` | `KEY=VALUE` manifest: format, timestamp, database name, … | — |
+| `pg.sql.gz` | the **whole** Postgres cluster | `pg_dumpall` + gzip |
+| `files.tar.gz` | `data/` (user files), `config/`, plus `custom_apps/` and `themes/` when present | live `tar` + gzip |
 
-`<TS>` is `YYYYMMDD-HHMMSS` (UTC). A matching pair = one consistent point in time.
+One file = one consistent point in time: copy it off-site as a unit, and the
+DB dump can never be separated from its matching `config.php`. Bundling stages
+the members on the backup PVC first, so keep roughly **2× one run's size**
+free. (Pre-0.6 runs wrote a `postgres/` + `nextcloud/` *pair* instead — those
+remain restorable via the manual guide, and retention still prunes them.)
 
 > `config/` is included because `config.php` holds the `secret`, `passwordsalt`,
 > and `dbpassword` the database is keyed against — the DB dump is only restorable
@@ -74,8 +80,8 @@ reachable through a Pod that mounts it, or via storage-layer snapshots:
 - It **`kubectl exec`s into the live Pods** rather than mounting the RWO PVCs, so
   it never `Multi-Attach`es.
 - It runs as a non-root, restricted-PSS Pod with a **minimal ServiceAccount**
-  (`pods/exec` only) and its **own CiliumNetworkPolicy** (egress to the
-  kube-apiserver + DNS only).
+  (`pods/exec`, plus `deployments/scale` — restore-mode's only write) and its
+  **own network policy** (egress to the kube-apiserver + DNS only).
 - Archives older than `retentionDays` are pruned automatically.
 - The volume-root `lost+found` artifact is excluded from the data tar (it would
   otherwise trip a noisy chmod warning on restore).
@@ -89,23 +95,53 @@ archives survive PVC deletion.
 
 ---
 
-## Restoring
+## Restoring — scripted
 
-The full, copy-pasteable procedure lives in **[restore.md](restore.md)** — it
-covers:
+The same script that takes the backups performs the restore. Target state: a
+**fresh install of the chart** (same or different cluster/release) — Secrets
+bootstrapped, pods healthy, and the backup PVC attached via
+`backup.persistence.existingClaim`. Then launch a one-shot Job cloned from the
+CronJob with the restore mode injected:
 
-1. Identifying which backup to restore (a helper Pod reads the backup PVC).
-2. Maintenance mode.
-3. Restoring `data/` + `config/` (stream the tar into the running Pod).
-4. Restoring the database (scale to 0 → `dropdb` → reload `pg_dumpall` → scale up).
-5. Reconciling (`occ files:scan`) and verifying.
+```bash
+NS=nextcloud REL=nextcloud-stack
+# RESTORE_ARCHIVE: a specific backup-<TS>.tar, or 'latest'
+kubectl -n $NS create job restore-$(date +%s) --from=cronjob/$REL-backup \
+  --dry-run=client -o json \
+| jq '.spec.template.spec.containers[0].env += [
+    {"name":"MODE","value":"restore"},
+    {"name":"RESTORE_ARCHIVE","value":"latest"}]' \
+| kubectl create -f -
+kubectl -n $NS logs -f job/$(kubectl -n $NS get job -o name --sort-by=.metadata.creationTimestamp | tail -1 | cut -d/ -f2)
+```
 
-It also includes a **verification drill** (§9) you should run quarterly, and an
-in-cluster variant for very large data sets.
+What the restore does, in order:
 
-> The restore steps were validated end-to-end: an on-disk file **and** a database
-> row were destroyed and recovered. Quote the guide; don't improvise during an
-> incident.
+1. **Verifies the whole archive first** (gzip integrity + the `pg_dumpall`
+   completion trailer) — a corrupt archive aborts before anything is touched.
+2. Streams `files.tar.gz` into the live php container (`data/`, `config/`,
+   `custom_apps/`, `themes/`).
+3. **Converges the restored `config.php` to the current Secrets/env**
+   (`dbpassword`/`dbuser`/`dbhost`/`dbname`) — `instanceid`, `secret` and
+   `passwordsalt` stay as backed up, since they key the restored data. This is
+   what makes restore-onto-fresh-install (and onto a different release name)
+   work, and keeps the `manageAppRole` password sync consistent.
+4. Scales Nextcloud to 0, drops the database, reloads the dump, and resets the
+   DB role passwords to the current Secrets **in the same psql session** (the
+   dump itself would otherwise reset them to the old ones).
+5. Scales back up, lifts maintenance mode, bumps the data fingerprint (so
+   desktop/mobile clients resync) and runs `occ files:scan --all`.
+
+> **Log in with the backed-up instance's credentials afterwards** — user
+> accounts (including admin) come from the restored database, not from the
+> fresh install's bootstrap password. `occ user:resetpassword admin` if lost.
+
+The manual step-by-step equivalent (also the path for **pre-0.6 pair-layout**
+backups) lives in **[restore.md](restore.md)**, including a **verification
+drill** you should run quarterly.
+
+> The restore flow was validated end-to-end: an on-disk file **and** a database
+> row were destroyed and recovered. Don't improvise during an incident.
 
 ---
 
@@ -118,8 +154,10 @@ kubectl -n nextcloud create job manual-backup --from=cronjob/nextcloud-stack-bac
 # watch it
 kubectl -n nextcloud logs -f job/manual-backup
 
-# confirm the archives are valid (from a Pod mounting the backup PVC)
-#   gunzip -t postgres/pg-<TS>.sql.gz   &&   tar tzf nextcloud/files-<TS>.tar.gz
+# confirm the archive is valid (from a Pod mounting the backup PVC)
+#   tar tf backup-<TS>.tar                      # lists meta + pg.sql.gz + files.tar.gz
+#   tar -xOf backup-<TS>.tar pg.sql.gz | gunzip -t
+#   tar -xOf backup-<TS>.tar files.tar.gz | gunzip -t
 ```
 
 ---

@@ -1,13 +1,16 @@
 {{- if .Values.backup.enabled }}
 {{/*
-Backup CronJob — pg_dumpall + Nextcloud data/config tar to the backup PVC, via
-`kubectl exec` into the live Pods (no RWO multi-attach). Point the PVC's
-storageClassName at off-cluster storage (e.g. an NFS CSI class) for real DR.
+Backup CronJob — bundles pg_dumpall + the Nextcloud data/config/custom_apps
+into ONE self-contained archive (backup-<TS>.tar) on the backup PVC, via
+`kubectl exec` into the live Pods (no RWO multi-attach). The same script also
+implements MODE=restore for disaster recovery onto a fresh install — see
+docs/backup-and-restore.md. Point the PVC's storageClassName at off-cluster
+storage (e.g. an NFS CSI class) for real DR.
 
 No DHI image has kubectl + a shell, so this uses the public alpine/k8s image
 (documented exception, like cloudflared/whiteboard). Needs RBAC-create for its
-Role/RoleBinding (pods/exec) and — with networkPolicy.enabled — a
-CiliumNetworkPolicy allowing egress to the kube-apiserver.
+Role/RoleBinding (pods/exec + deployments/scale for restore) and — with
+networkPolicy.enabled — a policy allowing egress to the kube-apiserver.
 */}}
 {{- $fullname := include "nextcloud-stack.backup.fullname" . -}}
 apiVersion: batch/v1
@@ -51,9 +54,14 @@ spec:
                 - { name: BACKUP_NS,        value: {{ .Release.Namespace | quote }} }
                 - { name: PG_ENABLED,       value: {{ .Values.postgres.enabled | quote }} }
                 - { name: PG_POD,           value: {{ printf "%s-0" (include "nextcloud-stack.postgres.fullname" .) | quote }} }
+                - { name: PG_DB,            value: {{ .Values.postgres.auth.database | quote }} }
                 - { name: NC_DEPLOY,        value: {{ include "nextcloud-stack.nextcloud.fullname" . | quote }} }
                 - { name: RETENTION_DAYS,   value: {{ .Values.backup.retentionDays | quote }} }
                 - { name: MAINTENANCE_MODE, value: {{ .Values.backup.maintenanceMode | quote }} }
+                # MODE defaults to `backup` in the script. For disaster
+                # recovery, clone this CronJob into a one-shot Job with
+                # MODE=restore + RESTORE_ARCHIVE injected — copy-paste command
+                # in docs/backup-and-restore.md.
               resources:
                 {{- toYaml .Values.backup.resources | nindent 16 }}
               volumeMounts:

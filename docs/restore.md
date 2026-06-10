@@ -1,5 +1,22 @@
 # Restoring Nextcloud from a backup
 
+> **Start here:** since chart 0.6 the backup script restores itself — one
+> command launches a Job that verifies the archive, restores files + DB onto a
+> fresh install, and converges credentials to your current Secrets. See
+> [Backup & Restore › Restoring — scripted](backup-and-restore.md#restoring--scripted).
+>
+> This page is the **manual equivalent** of what that Job does — use it for
+> **pre-0.6 pair-layout backups** (`postgres/pg-<TS>.sql.gz` +
+> `nextcloud/files-<TS>.tar.gz`), for partial restores, or to understand the
+> mechanics. For a 0.6+ single archive (`backup-<TS>.tar`), first unpack the
+> pair from it: `tar -xf backup-<TS>.tar pg.sql.gz files.tar.gz`.
+>
+> One manual-flow caveat the scripted restore handles for you: with
+> `postgres.auth.manageAppRole` (default since 0.6), finish by setting the DB
+> role passwords and `config.php`'s `dbpassword` to the **current** Secret
+> values, or the next pod start re-syncs the role password and strands the
+> restored `config.php`.
+
 This restores the data produced by the chart's optional backup CronJob
 (`backup.enabled: true`). It is **proven end-to-end**: the exact commands below
 were run as a full *back-up → wipe → restore* cycle (an on-disk file *and* a
