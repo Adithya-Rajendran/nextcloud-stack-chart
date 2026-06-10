@@ -116,8 +116,12 @@ spec:
   volumeClaimTemplates:
     - metadata:
         name: data
+        # selectorLabels ONLY — volumeClaimTemplates metadata is immutable, so a
+        # version-varying label (helm.sh/chart, app.kubernetes.io/version) here
+        # makes every chart bump a forbidden STS update (broke the 0.2.0→0.3.0
+        # upgrade in the field).
         labels:
-          {{- include "nextcloud-stack.postgres.labels" . | nindent 10 }}
+          {{- include "nextcloud-stack.postgres.selectorLabels" . | nindent 10 }}
         annotations:
           # PVC outlives the StatefulSet — explicit delete required to drop data.
           helm.sh/resource-policy: keep
