@@ -44,7 +44,7 @@ nextcloud:
   image:
     registry: ghcr.io
     repository: adithya-rajendran/nextcloud-fpm
-    tag: 33.0.3-fpm
+    tag: 33.0.5-fpm
     # Pin via scripts/pin-digests.sh (overrides tag when set).
     digest: ""
     pullPolicy: IfNotPresent
