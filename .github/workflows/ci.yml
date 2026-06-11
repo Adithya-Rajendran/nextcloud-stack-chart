@@ -11,12 +11,12 @@ jobs:
     name: helm lint + template + kubeconform
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@v5
         with:
-          version: v3.18.0
+          version: v3.21.0
 
       # `helm lint` against the chart with example-values supplied. Without
       # values the requireSecret helpers fail (by design) — example-values

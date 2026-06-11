@@ -49,6 +49,7 @@ spec:
         checksum/config:    {{ include (print $.Template.BasePath "/nextcloud/configmap-config.yaml") . | sha256sum }}
         checksum/nginx:     {{ include (print $.Template.BasePath "/nextcloud/configmap-nginx.yaml") . | sha256sum }}
         checksum/php-ini:   {{ include (print $.Template.BasePath "/nextcloud/configmap-php-ini.yaml") . | sha256sum }}
+        checksum/fpm-pool:  {{ include (print $.Template.BasePath "/nextcloud/configmap-fpm-pool.yaml") . | sha256sum }}
         checksum/hooks:     {{ include (print $.Template.BasePath "/nextcloud/configmap-hooks.yaml") . | sha256sum }}
         {{- with .Values.nextcloud.podAnnotations }}
         {{- toYaml . | nindent 8 }}
@@ -254,6 +255,14 @@ spec:
               mountPath: /usr/local/etc/php/conf.d/custom.ini
               subPath: custom.ini
               readOnly: true
+            - name: php-ini
+              mountPath: /usr/local/etc/php/conf.d/zz-chart-opcache.ini
+              subPath: zz-chart-opcache.ini
+              readOnly: true
+            - name: fpm-pool
+              mountPath: /usr/local/etc/php-fpm.d/zz-nextcloud.conf
+              subPath: zz-nextcloud.conf
+              readOnly: true
             - name: chart-config
               mountPath: /etc/nextcloud-stack
               readOnly: true
@@ -352,6 +361,9 @@ spec:
         - name: php-ini
           configMap:
             name: {{ include "nextcloud-stack.fullname" . }}-php-ini
+        - name: fpm-pool
+          configMap:
+            name: {{ include "nextcloud-stack.fullname" . }}-fpm-pool
         - name: chart-config
           configMap:
             name: {{ include "nextcloud-stack.fullname" . }}-config

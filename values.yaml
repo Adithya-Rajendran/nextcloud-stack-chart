@@ -124,6 +124,18 @@ nextcloud:
       cpu: "2"
       memory: 4Gi
 
+  # php-fpm pool sizing (rendered into zz-nextcloud.conf). The image's stock
+  # pool caps at pm.max_children = 5 — a handful of DAV sync clients saturates
+  # that and queues every other request behind them while CPU idles. Worst-case
+  # memory ≈ maxChildren × ~120-150MB; keep under resources.limits.memory.
+  phpFpm:
+    maxChildren: 12
+    startServers: 4
+    minSpareServers: 2
+    maxSpareServers: 8
+    # Recycle each worker after N requests (bounds slow extension leaks).
+    maxRequests: 500
+
   podAnnotations: {}
   podLabels: {}
 
@@ -213,6 +225,17 @@ nextcloud:
     # Upload / memory tuning.
     maxFileUploadSize: 16G
     memoryLimit: 512M
+    # OPcache sizing (rendered into zz-chart-opcache.ini, which loads after the
+    # image's opcache-recommended.ini — overrides placed in customPhp would
+    # silently lose to it). Nextcloud ships >10k PHP files, so the stock
+    # max_accelerated_files=10000 cap is borderline; 16384 + 192MB keeps every
+    # script compiled. JIT buffer matches the upstream-recommended 8M (Nextcloud
+    # uses <2MiB of it; bigger buys nothing).
+    opcache:
+      memoryConsumption: 192
+      internedStringsBuffer: 32
+      maxAcceleratedFiles: 16384
+      jitBufferSize: 8M
     # PHP custom.ini settings — keep the security defaults.
     customPhp: |
       ; Force Secure flag on session cookies — Nextcloud's __Host- cookie prefix
@@ -298,6 +321,17 @@ postgres:
   resources:
     requests: { cpu: 100m, memory: 256Mi }
     limits:   { cpu: "1",  memory: 1Gi }
+
+  # Server settings passed as `-c key=value` args. Stock postgres ships
+  # HDD-era defaults (shared_buffers 128MB, random_page_cost 4) — these
+  # assume the 1Gi container limit above and SSD/network-block storage.
+  # Sized for the limit: raise shared_buffers with the limit (~25%).
+  serverSettings:
+    shared_buffers: 256MB
+    effective_cache_size: 768MB
+    work_mem: 8MB
+    random_page_cost: "1.1"
+    wal_compression: "on"
 
   # Persistence. Empty storageClassName ⇒ cluster default StorageClass.
   persistence:
@@ -449,7 +483,7 @@ whiteboard:
   image:
     registry: ghcr.io
     repository: nextcloud-releases/whiteboard
-    tag: "v1.5.3"
+    tag: "v1.5.9"
     # Pin via scripts/pin-digests.sh (overrides tag when set).
     digest: ""
     pullPolicy: IfNotPresent
