@@ -191,37 +191,80 @@ do_restore() {
   log "verifying files.tar.gz"
   tar -xOf "$ARCHIVE" files.tar.gz | gzip -t 2>/dev/null || fail "files.tar.gz is corrupt — refusing to restore"
 
-  # ---- 2. capture the CURRENT credentials from the live pod envs -------------
+  # ---- 2. fail-fast plumbing -------------------------------------------------
+  # This cluster's API-proxied exec websocket can stay open AFTER a large
+  # transfer's bytes have already landed (seen as "websocket: close sent"). With
+  # no request timeout that pins the whole restore until the Job's
+  # activeDeadlineSeconds — and the Job controller then deletes the Pod, losing
+  # the logs. So bound every nextcloud-Pod call, and verify the big file
+  # transfer by CONTENT (the same philosophy as the backup's content checks)
+  # rather than trusting the exec's exit status. Tunable via env if a slow link
+  # needs longer.
+  RT="${RESTORE_REQUEST_TIMEOUT:-120s}"   # control-plane calls (creds/converge/scale/verify)
+  RTS="${RESTORE_STREAM_TIMEOUT:-900s}"   # the single large files stream
+  ncx() { timeout "$RT" kubectl exec -n "$BACKUP_NS" "deploy/$NC_DEPLOY" -c php -- "$@"; }
+
+  # ---- 3. capture the CURRENT credentials from the live pod envs -------------
   # (also proves both pods are up before we start). The restored config.php and
   # the reloaded DB roles are converged to THESE values, so the Secrets the
   # fresh install was bootstrapped with stay authoritative.
-  CUR_APP_USER=$(kubectl exec -n "$BACKUP_NS" "deploy/$NC_DEPLOY" -c php -- printenv POSTGRES_USER) || fail "cannot read app DB user from the nextcloud pod"
-  CUR_APP_PW=$(kubectl exec -n "$BACKUP_NS" "deploy/$NC_DEPLOY" -c php -- printenv POSTGRES_PASSWORD) || fail "cannot read app DB password from the nextcloud pod"
+  CUR_APP_USER=$(ncx printenv POSTGRES_USER) || fail "cannot read app DB user from the nextcloud pod"
+  CUR_APP_PW=$(ncx printenv POSTGRES_PASSWORD) || fail "cannot read app DB password from the nextcloud pod"
   if [ "$RESTORE_PG" = "true" ]; then
-    CUR_PG_USER=$(kubectl exec -n "$BACKUP_NS" "$PG_POD" -c postgres -- printenv POSTGRES_USER) || fail "cannot read bootstrap user from the postgres pod"
-    CUR_PG_PW=$(kubectl exec -n "$BACKUP_NS" "$PG_POD" -c postgres -- printenv POSTGRES_PASSWORD) || fail "cannot read bootstrap password from the postgres pod"
+    CUR_PG_USER=$(timeout "$RT" kubectl exec -n "$BACKUP_NS" "$PG_POD" -c postgres -- printenv POSTGRES_USER) || fail "cannot read bootstrap user from the postgres pod"
+    CUR_PG_PW=$(timeout "$RT" kubectl exec -n "$BACKUP_NS" "$PG_POD" -c postgres -- printenv POSTGRES_PASSWORD) || fail "cannot read bootstrap password from the postgres pod"
   fi
 
-  trap 'echo "RESTORE FAILED — the site may be in maintenance mode or scaled down; see docs/restore.md before retrying" >&2' EXIT
-  mm_on
+  trap 'echo "RESTORE FAILED — the instance may be scaled down or partially restored; see docs/restore.md before retrying" >&2' EXIT
 
-  # ---- 3. files: stream straight out of the archive into the php container ---
-  # The remote tar gunzips as it reads, so a truncated stream fails the exec
-  # (rc != 0) even on shells without pipefail. rc=1 = file-changed, tolerated.
+  # ---- 4. files: stream straight out of the archive into the php container ---
+  # The php container's liveness probe is a bare TCP check, so the (briefly
+  # inconsistent) restored config.php does NOT restart the Pod here — the
+  # convergence below runs against this same Pod, and the clean boot happens
+  # later when the DB step scales it 0->N.
+  #
+  # On this cluster the exec websocket can stay half-open AFTER every byte has
+  # landed ("websocket: close sent" — the original ~1h hang). So the remote
+  # shell drops a sentinel with tar's exit status the instant extraction
+  # finishes; we poll for it and move on as soon as the data is really in,
+  # rather than blocking on the dead socket until the RTS hard cap. tar's rc is
+  # advisory (a chmod warning on the root-owned data dir alone trips it); the
+  # AUTHORITATIVE check is by CONTENT — config.php's instanceid must match the
+  # archive's (the same philosophy as the backup's content verification).
   log "restoring files (data/ config/ custom_apps/ themes/)"
-  rc=0
-  tar -xOf "$ARCHIVE" files.tar.gz | kubectl exec -i -n "$BACKUP_NS" "deploy/$NC_DEPLOY" -c php -- \
-    tar xzf - --no-overwrite-dir --no-same-owner -C /var/www/html || rc=$?
-  [ "$rc" -le 1 ] || fail "files restore failed (rc=$rc)"
+  ncx rm -f /tmp/.nc-restore-rc >/dev/null 2>&1 || true
+  ( tar -xOf "$ARCHIVE" files.tar.gz \
+      | timeout "$RTS" kubectl exec -i -n "$BACKUP_NS" "deploy/$NC_DEPLOY" -c php -- \
+          sh -c 'tar xzf - --no-overwrite-dir --no-same-owner -C /var/www/html; echo "$?" >/tmp/.nc-restore-rc' \
+  ) >/dev/null 2>&1 &
+  STREAM_PID=$!
+  TAR_RC=""; waited=0; cap="${RTS%s}"
+  while [ "$waited" -lt "$cap" ]; do
+    TAR_RC=$(ncx cat /tmp/.nc-restore-rc 2>/dev/null | tr -dc '0-9')
+    [ -n "$TAR_RC" ] && break                    # remote tar finished (all members)
+    kill -0 "$STREAM_PID" 2>/dev/null || break    # local pipeline already returned
+    waited=$((waited + 5)); sleep 5
+  done
+  kill "$STREAM_PID" 2>/dev/null; wait "$STREAM_PID" 2>/dev/null || true
+  ncx rm -f /tmp/.nc-restore-rc >/dev/null 2>&1 || true
+  [ -n "$TAR_RC" ] && [ "$TAR_RC" -le 1 ] 2>/dev/null \
+    || log "  note: file stream did not report a clean tar status (rc=[$TAR_RC]) — relying on the content check below"
 
-  # ---- 4. converge restored config.php to the CURRENT env/Secrets ------------
+  iid_re="'instanceid'[[:space:]]*=>[[:space:]]*'[^']*'"
+  ARC_IID=$(tar -xOf "$ARCHIVE" files.tar.gz | tar -xzO config/config.php 2>/dev/null | grep -oE "$iid_re" | head -1)
+  LIVE_IID=$(ncx grep -oE "$iid_re" /var/www/html/config/config.php 2>/dev/null | head -1)
+  [ -n "$ARC_IID" ] && [ "$ARC_IID" = "$LIVE_IID" ] \
+    || fail "file restore verification failed — config.php did not land (archive=[$ARC_IID] live=[$LIVE_IID]); the DB is untouched, so this is safe to retry"
+  log "  files restored and verified (config.php instanceid matches the archive)"
+
+  # ---- 5. converge restored config.php to the CURRENT env/Secrets ------------
   # The backup's config.php carries the OLD dbpassword/dbhost. Left alone it
   # would break either immediately (different release name) or on the next pod
   # start (manageAppRole syncs the role password to the current Secret).
   # instanceid/secret/passwordsalt are deliberately untouched — they key the
   # restored data. maintenance is cleared; occ confirms it again at the end.
   log "converging restored config.php to current env"
-  kubectl exec -n "$BACKUP_NS" "deploy/$NC_DEPLOY" -c php -- php -r '
+  ncx php -r '
     $f = "/var/www/html/config/config.php";
     require $f;
     $CONFIG["dbpassword"]  = getenv("POSTGRES_PASSWORD");
@@ -233,11 +276,11 @@ do_restore() {
     echo "config.php converged\n";' || fail "config.php convergence failed"
 
   if [ "$RESTORE_PG" = "true" ]; then
-    # ---- 5. quiesce the app (frees every DB connection) ----------------------
-    ORIG_REPLICAS=$(kubectl get deploy -n "$BACKUP_NS" "$NC_DEPLOY" -o jsonpath='{.spec.replicas}' 2>/dev/null)
+    # ---- 6. quiesce the app (frees every DB connection) ----------------------
+    ORIG_REPLICAS=$(timeout "$RT" kubectl get deploy -n "$BACKUP_NS" "$NC_DEPLOY" -o jsonpath='{.spec.replicas}' 2>/dev/null)
     [ -n "$ORIG_REPLICAS" ] && [ "$ORIG_REPLICAS" -ge 1 ] 2>/dev/null || ORIG_REPLICAS=1
     log "scaling deploy/$NC_DEPLOY 0 (was $ORIG_REPLICAS)"
-    kubectl scale -n "$BACKUP_NS" "deploy/$NC_DEPLOY" --replicas=0 || fail "scale to 0 failed"
+    timeout "$RT" kubectl scale -n "$BACKUP_NS" "deploy/$NC_DEPLOY" --replicas=0 || fail "scale to 0 failed"
     CONN_SQL="SELECT count(*) FROM pg_stat_activity WHERE datname = $(qlit "$ARC_DB")"
     i=0
     while [ "$(pgsql_scalar "$CONN_SQL" 2>/dev/null || echo 1)" != "0" ]; do
@@ -245,7 +288,7 @@ do_restore() {
       sleep 2
     done
 
-    # ---- 6. drop + reload, resetting role passwords in the SAME session ------
+    # ---- 7. drop + reload, resetting role passwords in the SAME session ------
     # pg_dumpall's ALTER ROLE statements would reset both roles to the OLD
     # passwords mid-reload; the epilogue (same already-authenticated session)
     # converges them back to the current Secrets before anything reconnects.
@@ -262,13 +305,27 @@ do_restore() {
     EXISTS_SQL="SELECT count(*) FROM pg_database WHERE datname = $(qlit "$ARC_DB")"
     [ "$(pgsql_scalar "$EXISTS_SQL")" = "1" ] || fail "database $ARC_DB missing after reload"
 
-    # ---- 7. bring the app back ------------------------------------------------
+    # ---- 8. bring the app back FRESH ------------------------------------------
+    # The scaled-up Pod boots against the CONVERGED config.php + the RELOADED
+    # DB — a clean start. (The old flow left the in-place, exec-mutated Pod
+    # running, which wedged on its next entrypoint re-run.)
     log "scaling deploy/$NC_DEPLOY back to $ORIG_REPLICAS"
-    kubectl scale -n "$BACKUP_NS" "deploy/$NC_DEPLOY" --replicas="$ORIG_REPLICAS" || fail "scale up failed"
+    timeout "$RT" kubectl scale -n "$BACKUP_NS" "deploy/$NC_DEPLOY" --replicas="$ORIG_REPLICAS" || fail "scale up failed"
+    kubectl rollout status -n "$BACKUP_NS" "deploy/$NC_DEPLOY" --timeout=600s || fail "nextcloud did not become ready after restore"
+  else
+    # Files-only restore (no DB in the archive, or postgres.enabled=false): the
+    # running Pod still holds its pre-restore config in memory, so bounce it via
+    # the scale subresource (the only Deployment write this SA is granted) to
+    # boot against the restored files + converged config.php.
+    ORIG_REPLICAS=$(timeout "$RT" kubectl get deploy -n "$BACKUP_NS" "$NC_DEPLOY" -o jsonpath='{.spec.replicas}' 2>/dev/null)
+    [ -n "$ORIG_REPLICAS" ] && [ "$ORIG_REPLICAS" -ge 1 ] 2>/dev/null || ORIG_REPLICAS=1
+    log "files-only restore — bouncing deploy/$NC_DEPLOY (0 -> $ORIG_REPLICAS) to apply"
+    timeout "$RT" kubectl scale -n "$BACKUP_NS" "deploy/$NC_DEPLOY" --replicas=0 || fail "scale to 0 failed"
+    timeout "$RT" kubectl scale -n "$BACKUP_NS" "deploy/$NC_DEPLOY" --replicas="$ORIG_REPLICAS" || fail "scale up failed"
     kubectl rollout status -n "$BACKUP_NS" "deploy/$NC_DEPLOY" --timeout=600s || fail "nextcloud did not become ready after restore"
   fi
 
-  # ---- 8. reconcile -----------------------------------------------------------
+  # ---- 9. reconcile -----------------------------------------------------------
   occ maintenance:mode --off || true
   MM_ON=0
   # New data fingerprint tells desktop/mobile clients the server state changed.

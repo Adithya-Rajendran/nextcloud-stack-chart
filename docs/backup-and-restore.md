@@ -120,7 +120,14 @@ What the restore does, in order:
 1. **Verifies the whole archive first** (gzip integrity + the `pg_dumpall`
    completion trailer) — a corrupt archive aborts before anything is touched.
 2. Streams `files.tar.gz` into the live php container (`data/`, `config/`,
-   `custom_apps/`, `themes/`).
+   `custom_apps/`, `themes/`), then verifies it landed by **content**
+   (`config.php`'s `instanceid` must match the archive's) rather than trusting
+   the exec's exit status — some API proxies leave the exec websocket half-open
+   after the bytes arrive, which would otherwise hang the Job. A completion
+   sentinel means the restore proceeds the instant the data is in. Every
+   nextcloud-pod call is `timeout`-bounded; tune with the Job env vars
+   `RESTORE_REQUEST_TIMEOUT` (default `120s`) and `RESTORE_STREAM_TIMEOUT`
+   (default `900s`, the hard cap on the file stream) if a slow link needs more.
 3. **Converges the restored `config.php` to the current Secrets/env**
    (`dbpassword`/`dbuser`/`dbhost`/`dbname`) — `instanceid`, `secret` and
    `passwordsalt` stay as backed up, since they key the restored data. This is
