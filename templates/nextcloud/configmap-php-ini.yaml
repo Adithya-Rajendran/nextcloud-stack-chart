@@ -16,3 +16,12 @@ data:
     post_max_size       = {{ .Values.nextcloud.settings.maxFileUploadSize }}
     memory_limit        = {{ .Values.nextcloud.settings.memoryLimit }}
 {{ .Values.nextcloud.settings.customPhp | indent 4 }}
+  # Separate zz- prefixed file: conf.d loads alphabetically and the image's own
+  # opcache-recommended.ini sorts AFTER custom.ini — opcache overrides placed in
+  # custom.ini would silently lose. zz-chart-opcache.ini loads last and wins.
+  zz-chart-opcache.ini: |
+    ; Managed by the nextcloud-stack chart — see nextcloud.settings.opcache.
+    opcache.memory_consumption = {{ .Values.nextcloud.settings.opcache.memoryConsumption }}
+    opcache.interned_strings_buffer = {{ .Values.nextcloud.settings.opcache.internedStringsBuffer }}
+    opcache.max_accelerated_files = {{ .Values.nextcloud.settings.opcache.maxAcceleratedFiles }}
+    opcache.jit_buffer_size = {{ .Values.nextcloud.settings.opcache.jitBufferSize }}

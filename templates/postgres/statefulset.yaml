@@ -44,6 +44,15 @@ spec:
         - name: postgres
           image: {{ include "nextcloud-stack.image" .Values.postgres.image }}
           imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+{{- if .Values.postgres.serverSettings }}
+          # Flag-only args: the entrypoint prepends `postgres` when $1 starts
+          # with '-'. Range over a map is key-sorted ⇒ deterministic pod spec.
+          args:
+            {{- range $k, $v := .Values.postgres.serverSettings }}
+            - "-c"
+            - {{ printf "%s=%s" $k ($v | toString) | quote }}
+            {{- end }}
+{{- end }}
           securityContext:
             {{- toYaml .Values.postgres.containerSecurityContext | nindent 12 }}
           env:

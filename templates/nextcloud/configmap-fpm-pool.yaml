@@ -1,0 +1,29 @@
+{{/*
+php-fpm pool overrides — mounted at /usr/local/etc/php-fpm.d/zz-nextcloud.conf
+(the zz- prefix sorts after the stock www.conf, so these values win).
+
+The upstream image ships the php-fpm DEFAULT pool: pm.max_children = 5. Five
+workers is a real ceiling: every DAV/web request holds a worker for its full
+duration (~250ms+ for CalDAV REPORTs), so a couple of sync clients plus one
+browser session queue behind each other and Nextcloud "feels slow" while CPU
+sits idle. Size the pool from memory instead: worst case ≈ maxChildren ×
+~120-150MB RSS — keep that under nextcloud.resources.limits.memory.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "nextcloud-stack.fullname" . }}-fpm-pool
+  labels:
+    {{- include "nextcloud-stack.nextcloud.labels" . | nindent 4 }}
+data:
+  zz-nextcloud.conf: |
+    ; Managed by the nextcloud-stack chart — see nextcloud.phpFpm in values.yaml.
+    [www]
+    pm = dynamic
+    pm.max_children = {{ .Values.nextcloud.phpFpm.maxChildren }}
+    pm.start_servers = {{ .Values.nextcloud.phpFpm.startServers }}
+    pm.min_spare_servers = {{ .Values.nextcloud.phpFpm.minSpareServers }}
+    pm.max_spare_servers = {{ .Values.nextcloud.phpFpm.maxSpareServers }}
+    ; Recycle each worker after N requests — bounds slow extension leaks in
+    ; long-lived pools without a visible latency cost.
+    pm.max_requests = {{ .Values.nextcloud.phpFpm.maxRequests }}
