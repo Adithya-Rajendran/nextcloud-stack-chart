@@ -8,11 +8,11 @@ description: |
 type: application
 
 # Chart version — bump on chart changes.
-version: 0.7.0
+version: 0.7.1
 
 # Pinned to the custom fpm image's Nextcloud version.
 # When bumping Nextcloud, bump this AND values.yaml `nextcloud.image.tag`.
-appVersion: "33.0.3"
+appVersion: "33.0.5"
 
 home: https://github.com/adithya-rajendran/nextcloud-stack-chart
 sources:
@@ -35,13 +35,5 @@ dependencies: []
 annotations:
   # Bumped each time the *manifest* shape changes meaningfully.
   artifacthub.io/changes: |
-    - kind: added
-      description: php-fpm pool sizing via nextcloud.phpFpm (zz-nextcloud.conf) - the image's stock pm.max_children=5 ceiling queued requests behind a handful of DAV sync clients; default is now 12 workers
-    - kind: added
-      description: OPcache sizing via nextcloud.settings.opcache, rendered as zz-chart-opcache.ini so it loads AFTER the image's opcache-recommended.ini (overrides in custom.ini silently lost on load order); defaults raise memory to 192MB and max_accelerated_files to 16384 (Nextcloud ships >10k PHP files)
-    - kind: added
-      description: postgres.serverSettings map rendered as -c args - replaces HDD-era postgres defaults (shared_buffers 256MB, random_page_cost 1.1, work_mem 8MB, effective_cache_size 768MB, wal_compression on), sized for the default 1Gi limit
-    - kind: changed
-      description: whiteboard bumped v1.5.3 -> v1.5.9 (resource-source hardening in 1.5.8, memory-leak fixes)
-    - kind: changed
-      description: CI runs on Node 24-generation actions (checkout v5, setup-helm v5, create-pull-request v8) ahead of GitHub's 2026-06-16 forced migration; helm bumped to v3.21.0 (chart-extraction path-traversal fix landed in 3.20.2)
+    - kind: security
+      description: Nextcloud 33.0.3 -> 33.0.5 - May 2026 advisories include High-severity fixes (SQL injection via Tables column type, ID4me JWT verification bypass, two 2FA bypasses)
