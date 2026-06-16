@@ -336,8 +336,16 @@ spec:
             failureThreshold: 120
             timeoutSeconds: 3
           livenessProbe:
-            httpGet:
-              path: /status.php
+            # nginx-only liveness: confirm the web server is accepting TCP, NOT
+            # that PHP/Postgres are reachable. /status.php is a full PHP->DB
+            # request, so using it for LIVENESS let a transient DB/DNS blip
+            # SIGKILL nginx — dropping in-flight client/DAV connections and
+            # cold-starting its caches (observed: 371 web restarts vs 1 php).
+            # readinessProbe below keeps /status.php, so a pod with a dead DB is
+            # still pulled from Service endpoints; it just isn't restarted.
+            # (startupProbe above already gates first-boot, so liveness can't
+            # race startup.)
+            tcpSocket:
               port: http
             periodSeconds: 30
             timeoutSeconds: 5

@@ -8,7 +8,7 @@ description: |
 type: application
 
 # Chart version — bump on chart changes.
-version: 0.7.2
+version: 0.7.3
 
 # Pinned to the custom fpm image's Nextcloud version.
 # When bumping Nextcloud, bump this AND values.yaml `nextcloud.image.tag`.
@@ -36,6 +36,6 @@ annotations:
   # Bumped each time the *manifest* shape changes meaningfully.
   artifacthub.io/changes: |
     - kind: fixed
-      description: "restore (MODE=restore) no longer hangs to the Job deadline: every nextcloud-pod kubectl call is now request-timeout bounded, and the large file stream is verified by CONTENT (config.php instanceid) instead of trusting an exec exit code that a stuck-open API-proxy websocket can leave non-zero AFTER the bytes land. Tunable via RESTORE_REQUEST_TIMEOUT / RESTORE_STREAM_TIMEOUT."
-    - kind: fixed
-      description: "restore drops the pointless pre-restore maintenance-mode toggle (its config.php write was immediately overwritten by the file restore) and bounces the Nextcloud Deployment via the scale subresource so the app boots clean against the converged config.php + reloaded DB, instead of leaving the in-place exec-mutated pod that wedged on its next entrypoint run."
+      description: "web (nginx) container livenessProbe changed from httpGet /status.php (a full PHP->Postgres request) to a tcpSocket check on the http port. Probing the DB-coupled endpoint for LIVENESS let a transient DB/DNS blip SIGKILL nginx (371 web-container restarts observed vs 1 for php), dropping in-flight client/DAV connections and cold-starting caches. readinessProbe keeps /status.php, so a pod with a dead DB is still removed from Service endpoints — it just isn't restarted."
+    - kind: changed
+      description: "OPcache max_accelerated_files raised 16384 -> 32531 and memory_consumption 192 -> 256MB. The live app set ships ~17918 PHP files, exceeding the 16384 slot cap and forcing per-request eviction/recompile of hot scripts; 32531 (prime) covers it with headroom."
