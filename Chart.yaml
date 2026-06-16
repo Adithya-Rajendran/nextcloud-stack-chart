@@ -37,3 +37,5 @@ annotations:
   artifacthub.io/changes: |
     - kind: fixed
       description: "web (nginx) container livenessProbe changed from httpGet /status.php (a full PHP->Postgres request) to a tcpSocket check on the http port. Probing the DB-coupled endpoint for LIVENESS let a transient DB/DNS blip SIGKILL nginx (371 web-container restarts observed vs 1 for php), dropping in-flight client/DAV connections and cold-starting caches. readinessProbe keeps /status.php, so a pod with a dead DB is still removed from Service endpoints — it just isn't restarted."
+    - kind: changed
+      description: "OPcache max_accelerated_files raised 16384 -> 32531 and memory_consumption 192 -> 256MB. The live app set ships ~17918 PHP files, exceeding the 16384 slot cap and forcing per-request eviction/recompile of hot scripts; 32531 (prime) covers it with headroom."

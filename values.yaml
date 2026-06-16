@@ -227,14 +227,18 @@ nextcloud:
     memoryLimit: 512M
     # OPcache sizing (rendered into zz-chart-opcache.ini, which loads after the
     # image's opcache-recommended.ini — overrides placed in customPhp would
-    # silently lose to it). Nextcloud ships >10k PHP files, so the stock
-    # max_accelerated_files=10000 cap is borderline; 16384 + 192MB keeps every
-    # script compiled. JIT buffer matches the upstream-recommended 8M (Nextcloud
-    # uses <2MiB of it; bigger buys nothing).
+    # silently lose to it). The live webroot+apps tree now holds ~17.9k PHP
+    # files (measured: find /var/www/html -name '*.php' | wc -l = 17918), which
+    # EXCEEDS the previous 16384 slot cap — so hot scripts were being evicted
+    # and recompiled per-request, adding compile latency that compounds every
+    # cold start. 32531 (prime, the standard large-NC recommendation) covers the
+    # current set with headroom; 256MB holds the compiled bytecode. JIT buffer
+    # matches the upstream-recommended 8M (Nextcloud uses <2MiB of it; bigger
+    # buys nothing).
     opcache:
-      memoryConsumption: 192
+      memoryConsumption: 256
       internedStringsBuffer: 32
-      maxAcceleratedFiles: 16384
+      maxAcceleratedFiles: 32531
       jitBufferSize: 8M
     # PHP custom.ini settings — keep the security defaults.
     customPhp: |
