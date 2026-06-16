@@ -1,11 +1,13 @@
 {{- if .Values.backup.enabled }}
 {{/*
 Backup CronJob — bundles pg_dumpall + the Nextcloud data/config/custom_apps
-into ONE self-contained archive (backup-<TS>.tar) on the backup PVC, via
-`kubectl exec` into the live Pods (no RWO multi-attach). The same script also
-implements MODE=restore for disaster recovery onto a fresh install — see
-docs/backup-and-restore.md. Point the PVC's storageClassName at off-cluster
-storage (e.g. an NFS CSI class) for real DR.
+into ONE self-contained archive (backup-<TS>.tar) on the backup PVC. The DB is
+dumped by the `pg-dump` initContainer OVER THE SERVICE (no `kubectl exec` → no
+kubelet-proxy 502); the files tar still execs the live php Pod (its RWO data
+PVC can't be mounted twice). The same script also implements MODE=restore for
+disaster recovery onto a fresh install — see docs/backup-and-restore.md (or the
+one-command scripts/dr-restore.sh wrapper). Point the PVC's storageClassName at
+off-cluster storage (e.g. an NFS CSI class) for real DR.
 
 No DHI image has kubectl + a shell, so this uses the public alpine/k8s image
 (documented exception, like cloudflared/whiteboard). Needs RBAC-create for its
@@ -13,6 +15,7 @@ Role/RoleBinding (pods/exec + deployments/scale for restore) and — with
 networkPolicy.enabled — a policy allowing egress to the kube-apiserver.
 */}}
 {{- $fullname := include "nextcloud-stack.backup.fullname" . -}}
+{{- $dbSecret := include "nextcloud-stack.secretName" (dict "existing" .Values.postgres.auth.existingSecret "default" (printf "%s-postgres" (include "nextcloud-stack.fullname" .))) -}}
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -42,6 +45,43 @@ spec:
           {{- include "nextcloud-stack.imagePullSecrets" . | nindent 10 }}
           securityContext:
             {{- toYaml .Values.backup.podSecurityContext | nindent 12 }}
+{{- if .Values.postgres.enabled }}
+          initContainers:
+            # Dump Postgres OVER THE SERVICE — NOT `kubectl exec` — so a flaky
+            # kubelet proxy on the postgres node can no longer 502 the dump.
+            # Uses the chart's OWN Postgres image (pg_dumpall present, major
+            # matches the server) and libpq PG* env, so it needs neither a shell
+            # nor gzip and works on the shell-less DHI image. pg_dumpall needs a
+            # superuser (the app role is NOSUPERUSER under manageAppRole), so it
+            # connects as the bootstrap `postgres` user. Writes the uncompressed
+            # dump to the shared /pgdump emptyDir; the backup container gzips,
+            # verifies and bundles it. A restore Job strips this initContainer
+            # (it has nothing to dump) — see docs/backup-and-restore.md.
+            - name: pg-dump
+              image: {{ include "nextcloud-stack.image" .Values.postgres.image }}
+              imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+              command: ["pg_dumpall", "-f", "/pgdump/pg.sql"]
+              securityContext:
+                {{- toYaml .Values.backup.containerSecurityContext | nindent 16 }}
+              env:
+                - { name: HOME,   value: /tmp }
+                - { name: PGHOST, value: {{ include "nextcloud-stack.postgres.host" . | quote }} }
+                - { name: PGPORT, value: {{ .Values.postgres.service.port | quote }} }
+{{- if .Values.postgres.auth.manageAppRole }}
+                - { name: PGUSER, value: postgres }
+                - name: PGPASSWORD
+                  valueFrom: { secretKeyRef: { name: {{ $dbSecret }}, key: postgres-admin-password } }
+{{- else }}
+                - { name: PGUSER, value: {{ .Values.postgres.auth.username | quote }} }
+                - name: PGPASSWORD
+                  valueFrom: { secretKeyRef: { name: {{ $dbSecret }}, key: nextcloud-db-password } }
+{{- end }}
+              resources:
+                {{- toYaml .Values.backup.resources | nindent 16 }}
+              volumeMounts:
+                - { name: pgdump, mountPath: /pgdump }
+                - { name: tmp,    mountPath: /tmp }
+{{- end }}
           containers:
             - name: backup
               image: {{ include "nextcloud-stack.image" .Values.backup.image }}
@@ -58,6 +98,9 @@ spec:
                 - { name: NC_DEPLOY,        value: {{ include "nextcloud-stack.nextcloud.fullname" . | quote }} }
                 - { name: RETENTION_DAYS,   value: {{ .Values.backup.retentionDays | quote }} }
                 - { name: MAINTENANCE_MODE, value: {{ .Values.backup.maintenanceMode | quote }} }
+{{- if .Values.postgres.enabled }}
+                - { name: PG_DUMP_FILE,     value: /pgdump/pg.sql }
+{{- end }}
                 # MODE defaults to `backup` in the script. For disaster
                 # recovery, clone this CronJob into a one-shot Job with
                 # MODE=restore + RESTORE_ARCHIVE injected — copy-paste command
@@ -68,6 +111,9 @@ spec:
                 - { name: backups, mountPath: /backup }
                 - { name: scripts, mountPath: /scripts, readOnly: true }
                 - { name: tmp,     mountPath: /tmp }
+{{- if .Values.postgres.enabled }}
+                - { name: pgdump,  mountPath: /pgdump }
+{{- end }}
           volumes:
             - name: backups
               persistentVolumeClaim:
@@ -78,4 +124,11 @@ spec:
                 defaultMode: 0555
             - name: tmp
               emptyDir: { sizeLimit: 512Mi }
+{{- if .Values.postgres.enabled }}
+            # Holds the uncompressed pg_dumpall output from the pg-dump
+            # initContainer until the backup container gzips it. The Nextcloud
+            # DB is metadata only (no file contents), so 2Gi is ample.
+            - name: pgdump
+              emptyDir: { sizeLimit: 2Gi }
+{{- end }}
 {{- end }}

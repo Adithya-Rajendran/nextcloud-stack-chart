@@ -182,6 +182,14 @@ spec:
             {{- include "nextcloud-stack.nextcloud.selectorLabels" . | nindent 12 }}
       toPorts:
         - ports: [{ port: {{ .Values.postgres.service.port | quote }}, protocol: TCP }]
+{{- if .Values.backup.enabled }}
+    # Backup CronJob's pg-dump initContainer dumps Postgres over the Service.
+    - fromEndpoints:
+        - matchLabels:
+            {{- include "nextcloud-stack.backup.selectorLabels" . | nindent 12 }}
+      toPorts:
+        - ports: [{ port: {{ .Values.postgres.service.port | quote }}, protocol: TCP }]
+{{- end }}
 {{- end }}
 
 ---
@@ -403,7 +411,7 @@ spec:
 {{- end }}
 
 ---
-# ---- backup: egress to the kube-apiserver (kubectl exec) + DNS -------------
+# ---- backup: egress to the kube-apiserver (kubectl exec) + DNS + Postgres ---
 {{- if .Values.backup.enabled }}
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
@@ -423,6 +431,14 @@ spec:
             k8s-app: kube-dns
       toPorts:
         - ports: [{ port: "53", protocol: UDP }, { port: "53", protocol: TCP }]
+{{- if .Values.postgres.enabled }}
+    # pg-dump initContainer dumps Postgres over the Service (no exec).
+    - toEndpoints:
+        - matchLabels:
+            {{- include "nextcloud-stack.postgres.selectorLabels" . | nindent 12 }}
+      toPorts:
+        - ports: [{ port: {{ .Values.postgres.service.port | quote }}, protocol: TCP }]
+{{- end }}
 {{- end }}
 
 ---

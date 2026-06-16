@@ -193,6 +193,16 @@ spec:
       ports:
         - port: {{ .Values.postgres.service.port }}
           protocol: TCP
+{{- if .Values.backup.enabled }}
+    # Backup CronJob's pg-dump initContainer dumps over the Service.
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "nextcloud-stack.backup.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: {{ .Values.postgres.service.port }}
+          protocol: TCP
+{{- end }}
 {{- end }}
 
 ---
@@ -473,7 +483,7 @@ spec:
 {{- end }}
 
 ---
-# ---- backup: egress to the apiserver (kubectl exec) + DNS -------------------
+# ---- backup: egress to the apiserver (kubectl exec) + DNS + Postgres --------
 {{- if .Values.backup.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -504,6 +514,16 @@ spec:
       ports:
         - { port: 53, protocol: UDP }
         - { port: 53, protocol: TCP }
+{{- if .Values.postgres.enabled }}
+    # pg-dump initContainer dumps Postgres over the Service (no exec).
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "nextcloud-stack.postgres.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: {{ .Values.postgres.service.port }}
+          protocol: TCP
+{{- end }}
 {{- end }}
 
 ---
