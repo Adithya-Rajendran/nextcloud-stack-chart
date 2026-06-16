@@ -185,7 +185,15 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "    + kubectl apply -f - <<'EOF'"; echo "$MANIFEST" | sed 's/^/      /'; echo "      EOF"
 else
   echo "$MANIFEST" | kubectl apply -f -
-  kc wait --for=jsonpath='{.status.phase}'=Bound "pvc/$BACKUP_CLAIM" --timeout=120s
+  # Poll, don't `kubectl wait --for=jsonpath`: that hangs the full timeout when
+  # the PVC is ALREADY Bound (the static PV is pre-bound via claimRef, so it
+  # binds instantly) because it waits for a watch update event that never comes.
+  bound=""
+  for _ in $(seq 1 60); do
+    [ "$(kc get pvc "$BACKUP_CLAIM" -o jsonpath='{.status.phase}' 2>/dev/null)" = "Bound" ] && { bound=1; break; }
+    sleep 2
+  done
+  [ -n "$bound" ] || fail "pvc/$BACKUP_CLAIM did not reach Bound"
 fi
 
 # ---- 3. Secrets (delegate; idempotent) -------------------------------------
@@ -202,27 +210,43 @@ else
   [[ "$MET" -eq 1 ]] && BS_ARGS+=(--metrics)
   [[ -n "$CF_TOKEN" ]] && BS_ARGS+=(--cloudflare-token "$CF_TOKEN")
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    echo "    + $SCRIPT_DIR/bootstrap-secrets.sh ${BS_ARGS[*]/--cloudflare-token */--cloudflare-token ***}"
+    echo "    + bash $SCRIPT_DIR/bootstrap-secrets.sh ${BS_ARGS[*]/--cloudflare-token */--cloudflare-token ***}"
   else
-    "$SCRIPT_DIR/bootstrap-secrets.sh" "${BS_ARGS[@]}"
+    # invoke via `bash` so it works even if the file isn't marked executable
+    bash "$SCRIPT_DIR/bootstrap-secrets.sh" "${BS_ARGS[@]}"
   fi
 fi
 
 # ---- 4. install / upgrade the chart ----------------------------------------
 HELM_ACTION=install
 helm status "$RELEASE" -n "$NAMESPACE" >/dev/null 2>&1 && HELM_ACTION=upgrade
-log "helm $HELM_ACTION $RELEASE (--wait; blocks on postgres + nextcloud + db-migrate hook)"
+# NOTE: deliberately NO `--wait`. With Gateway-API + CiliumNetworkPolicy in the
+# release, `helm --wait` can't read those custom resources' readiness (they
+# report status: Unknown) and times out, marking the release `failed` even
+# though everything applied. helm still runs+waits the post-install db-migrate
+# hook; the explicit readiness gate below is what we rely on for "pods ready".
+log "helm $HELM_ACTION $RELEASE (no --wait; explicit readiness gate follows)"
 run helm "$HELM_ACTION" "$RELEASE" "$CHART_ROOT" -n "$NAMESPACE" \
   -f "$VALUES" \
   --set backup.enabled=true \
   --set backup.persistence.existingClaim="$BACKUP_CLAIM" \
-  --wait --timeout 15m
+  --timeout 15m
 
 # ---- 5. health gate (restore execs BOTH pods, so prove both are up) --------
+# POLL, don't `kubectl rollout status`/`wait`: this cluster's etcd watches are
+# flaky ("bookmark expired") and watch-based waits can hang past their timeout
+# even once the resource is healthy.
 if [[ "$DRY_RUN" -ne 1 ]]; then
   log "waiting for nextcloud + postgres to be ready"
-  kc rollout status "deploy/$RELEASE" --timeout=300s
-  kc exec "${RELEASE}-postgres-0" -c postgres -- pg_isready -h 127.0.0.1 >/dev/null \
+  ready=""
+  for _ in $(seq 1 120); do
+    want=$(kc get deploy "$RELEASE" -o jsonpath='{.spec.replicas}' 2>/dev/null)
+    got=$(kc get deploy "$RELEASE" -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
+    [ -n "$want" ] && [ "$got" = "$want" ] && { ready=1; break; }
+    sleep 5
+  done
+  [ -n "$ready" ] || fail "nextcloud deploy did not become ready"
+  kc exec "${RELEASE}-postgres-0" -c postgres -- pg_isready -h 127.0.0.1 >/dev/null 2>&1 \
     || fail "postgres not ready"
 fi
 
@@ -242,13 +266,24 @@ else
             {"name":"MODE","value":"restore"},
             {"name":"RESTORE_ARCHIVE","value":$a}]' \
     | kc create -f -
-  # stream the restore log, then gate on the Job result
-  kc wait --for=condition=Ready "pod" -l "job-name=$JOB" --timeout=120s 2>/dev/null || true
-  kc logs -f "job/$JOB" || true
-  if kc wait --for=condition=complete "job/$JOB" --timeout=20m 2>/dev/null; then
+  # wait for the Job's pod to exist, follow its log, then POLL the Job result
+  # (poll, not `kubectl wait` — flaky etcd watches can hang it).
+  for _ in $(seq 1 24); do
+    kc get pod -l "job-name=$JOB" 2>/dev/null | grep -q . && break
+    sleep 5
+  done
+  kc logs -f "job/$JOB" 2>/dev/null || true
+  result=""
+  for _ in $(seq 1 240); do                       # up to ~20m
+    [ "$(kc get job "$JOB" -o jsonpath='{.status.succeeded}' 2>/dev/null)" = "1" ] && { result=ok; break; }
+    f=$(kc get job "$JOB" -o jsonpath='{.status.failed}' 2>/dev/null)
+    [ -n "$f" ] && [ "$f" != "0" ] && { result=fail; break; }
+    sleep 5
+  done
+  if [[ "$result" == "ok" ]]; then
     log "restore Job completed"
   else
-    kc logs "job/$JOB" --tail=40 || true
+    kc logs "job/$JOB" --tail=40 2>/dev/null || true
     fail "restore Job did not complete — see logs above and docs/restore.md (the DB is untouched on a file-verify failure, so it is safe to re-run)"
   fi
   # Best-effort schema reconcile: the pod boot already auto-runs occ upgrade on
