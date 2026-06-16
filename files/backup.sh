@@ -27,12 +27,18 @@
 #   USER ACCOUNTS come from the backup: log in with the OLD instance's admin
 #   credentials, not the fresh install's bootstrap password.
 #
-# Both modes `kubectl exec` into the live Pods rather than mounting the RWO
-# PVCs (a second mount would Multi-Attach). No secret ever appears in a
-# command argument — credentials travel via pod env or stdin only.
+# The Postgres dump is produced OVER THE SERVICE by the CronJob's `pg-dump`
+# initContainer (no `kubectl exec` → immune to the flaky kubelet-proxy 502 that
+# was failing nightly runs). It lands uncompressed at $PG_DUMP_FILE (a shared
+# emptyDir); this script gzips + verifies + bundles it. The files tar still
+# `kubectl exec`s the live php Pod (its RWO data PVC can't be mounted twice) but
+# is now timeout-bounded with a small retry. Restore still execs the live Pods.
+# No secret ever appears in a command argument — credentials travel via pod env
+# or stdin only.
 #
 # Env (set by the CronJob): BACKUP_NS, NC_DEPLOY, PG_POD, PG_ENABLED, PG_DB,
-# RETENTION_DAYS, MAINTENANCE_MODE; restore adds MODE, RESTORE_ARCHIVE.
+# PG_DUMP_FILE, RETENTION_DAYS, MAINTENANCE_MODE, BACKUP_FILES_TIMEOUT,
+# BACKUP_FILES_RETRIES; restore adds MODE, RESTORE_ARCHIVE.
 set -u
 # pipefail where the shell has it (busybox ash, bash); content-based
 # verification below covers shells that don't. The subshell PROBE matters: a
@@ -90,20 +96,23 @@ do_backup() {
     mm_on
   fi
 
-  # ---- Postgres: pg_dumpall is a single consistent snapshot -----------------
-  # Verification is content-based, NOT pipe-status-based: without pipefail a
-  # failed pg_dumpall still leaves a small valid gzip from the empty stream. A
-  # complete dump always ends with pg_dump's "PostgreSQL database dump
-  # complete" trailer; gzip integrity + that trailer catch auth failures,
-  # truncation and masked kubectl errors regardless of shell semantics.
+  # ---- Postgres: gzip + verify the dump the initContainer made --------------
+  # The `pg-dump` initContainer already ran `pg_dumpall` OVER THE SERVICE (no
+  # kubectl exec) into $PG_DUMP_FILE — a single consistent snapshot — and the
+  # Job would have failed before reaching here if that exited non-zero. We just
+  # compress and verify it. Verification is content-based: a complete dump ends
+  # with pg_dump's "PostgreSQL database dump complete" trailer; gzip integrity +
+  # that trailer catch truncation/corruption regardless of shell semantics.
   if [ "${PG_ENABLED:-true}" = "true" ]; then
-    log "postgres dump -> pg.sql.gz"
-    pgexec 'pg_dumpall -U "$POSTGRES_USER" -h 127.0.0.1' </dev/null | gzip > "$STAGE/pg.sql.gz" || true
+    DUMP="${PG_DUMP_FILE:-/pgdump/pg.sql}"
+    log "postgres dump (made over the Service by initContainer) -> pg.sql.gz"
+    [ -s "$DUMP" ] || { rm -rf "$STAGE"; fail "dump $DUMP missing/empty — the pg-dump initContainer failed"; }
+    gzip -c "$DUMP" > "$STAGE/pg.sql.gz" || true
     if [ -s "$STAGE/pg.sql.gz" ] && gzip -t "$STAGE/pg.sql.gz" 2>/dev/null \
        && zcat "$STAGE/pg.sql.gz" | tail -c 4096 | grep -q 'PostgreSQL database dump complete'; then
       log "  ok: $(ls -lh "$STAGE/pg.sql.gz" | awk '{print $5}')"
     else
-      rm -rf "$STAGE"; fail "postgres dump failed (missing trailer or corrupt gzip)"
+      rm -rf "$STAGE"; fail "postgres dump invalid (missing trailer or corrupt gzip)"
     fi
   fi
 
@@ -113,16 +122,28 @@ do_backup() {
   # apps_paths entry in the upstream image) and themes/ when present. Core
   # code is NOT backed up — the image provides it. lost+found is the
   # root-owned ext4 volume-root artifact, not app data.
+  # This exec CAN still hit a transient kubelet-proxy blip, so it is now bounded
+  # by `timeout` and retried a few times instead of failing the whole run on one
+  # hiccup (tunable via BACKUP_FILES_TIMEOUT / BACKUP_FILES_RETRIES).
   log "nextcloud files tar -> files.tar.gz"
-  rc=0
-  kubectl exec -n "$BACKUP_NS" "deploy/$NC_DEPLOY" -c php -- \
-    sh -c 'cd /var/www/html && dirs="data config"; for d in custom_apps themes; do [ -d "$d" ] && dirs="$dirs $d"; done; tar czf - --ignore-failed-read --exclude="lost+found" $dirs' \
-    > "$STAGE/files.tar.gz" || rc=$?
-  if [ "$rc" -le 1 ] && [ -s "$STAGE/files.tar.gz" ] && gzip -t "$STAGE/files.tar.gz" 2>/dev/null; then
-    log "  ok (tar rc=$rc): $(ls -lh "$STAGE/files.tar.gz" | awk '{print $5}')"
-  else
-    rm -rf "$STAGE"; fail "nextcloud files tar failed (rc=$rc)"
-  fi
+  FT_TIMEOUT="${BACKUP_FILES_TIMEOUT:-1800s}"
+  FT_RETRIES="${BACKUP_FILES_RETRIES:-3}"
+  attempt=1
+  while :; do
+    rc=0
+    timeout "$FT_TIMEOUT" kubectl exec -n "$BACKUP_NS" "deploy/$NC_DEPLOY" -c php -- \
+      sh -c 'cd /var/www/html && dirs="data config"; for d in custom_apps themes; do [ -d "$d" ] && dirs="$dirs $d"; done; tar czf - --ignore-failed-read --exclude="lost+found" $dirs' \
+      > "$STAGE/files.tar.gz" || rc=$?
+    if [ "$rc" -le 1 ] && [ -s "$STAGE/files.tar.gz" ] && gzip -t "$STAGE/files.tar.gz" 2>/dev/null; then
+      log "  ok (tar rc=$rc): $(ls -lh "$STAGE/files.tar.gz" | awk '{print $5}')"
+      break
+    fi
+    if [ "$attempt" -ge "$FT_RETRIES" ]; then
+      rm -rf "$STAGE"; fail "nextcloud files tar failed after $attempt attempt(s) (rc=$rc)"
+    fi
+    log "  files tar attempt $attempt failed (rc=$rc) — retrying in 10s"
+    attempt=$((attempt + 1)); sleep 10
+  done
 
   # Artifacts captured — lift maintenance mode before local-only bundling.
   mm_off

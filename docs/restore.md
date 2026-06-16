@@ -1,9 +1,11 @@
 # Restoring Nextcloud from a backup
 
-> **Start here:** since chart 0.6 the backup script restores itself — one
-> command launches a Job that verifies the archive, restores files + DB onto a
-> fresh install, and converges credentials to your current Secrets. See
-> [Backup & Restore › Restoring — scripted](backup-and-restore.md#restoring--scripted).
+> **Start here:** for full disaster recovery, run **`scripts/dr-restore.sh`** —
+> one command takes a bare cluster + the archive to a working Nextcloud
+> (re-attach archive → bootstrap Secrets → helm install → restore Job). Since
+> chart 0.6 the backup script also restores itself into an already-running
+> instance via a one-shot Job. See
+> [Backup & Restore › Restoring — one command](backup-and-restore.md#restoring--one-command).
 >
 > This page is the **manual equivalent** of what that Job does — use it for
 > **pre-0.6 pair-layout backups** (`postgres/pg-<TS>.sql.gz` +

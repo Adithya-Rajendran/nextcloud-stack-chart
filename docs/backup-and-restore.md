@@ -26,7 +26,7 @@ Each run produces **one self-contained archive** on the backup PVC —
 | Member | Contents | Made with |
 |---|---|---|
 | `nextcloud-backup.meta` | `KEY=VALUE` manifest: format, timestamp, database name, … | — |
-| `pg.sql.gz` | the **whole** Postgres cluster | `pg_dumpall` + gzip |
+| `pg.sql.gz` | the **whole** Postgres cluster | `pg_dumpall` **over the Service** (a `pg-dump` initContainer) + gzip |
 | `files.tar.gz` | `data/` (user files), `config/`, plus `custom_apps/` and `themes/` when present | live `tar` + gzip |
 
 One file = one consistent point in time: copy it off-site as a unit, and the
@@ -77,11 +77,17 @@ reachable through a Pod that mounts it, or via storage-layer snapshots:
 
 ### How it stays safe
 
-- It **`kubectl exec`s into the live Pods** rather than mounting the RWO PVCs, so
-  it never `Multi-Attach`es.
+- The **Postgres dump runs over the Service** (a `pg-dump` initContainer using
+  the chart's own Postgres image — no `kubectl exec`), so a flaky kubelet proxy
+  can't `502` it. The **files tar** still `kubectl exec`s the live php Pod (its
+  RWO data PVC can't be mounted twice) and is now `timeout`-bounded with a small
+  retry (`BACKUP_FILES_TIMEOUT` / `BACKUP_FILES_RETRIES`). Neither path
+  `Multi-Attach`es a PVC.
 - It runs as a non-root, restricted-PSS Pod with a **minimal ServiceAccount**
   (`pods/exec`, plus `deployments/scale` — restore-mode's only write) and its
-  **own network policy** (egress to the kube-apiserver + DNS only).
+  **own network policy** (egress to the kube-apiserver, DNS, and Postgres `5432`
+  only). `pg_dumpall` connects as the `postgres` superuser, password from the
+  Secret's `postgres-admin-password` key — never on a command line.
 - Archives older than `retentionDays` are pruned automatically.
 - The volume-root `lost+found` artifact is excluded from the data tar (it would
   otherwise trip a noisy chmod warning on restore).
@@ -95,25 +101,49 @@ archives survive PVC deletion.
 
 ---
 
-## Restoring — scripted
+## Restoring — one command
 
-The same script that takes the backups performs the restore. Target state: a
-**fresh install of the chart** (same or different cluster/release) — Secrets
-bootstrapped, pods healthy, and the backup PVC attached via
-`backup.persistence.existingClaim`. Then launch a one-shot Job cloned from the
-CronJob with the restore mode injected:
+For full disaster recovery (a **bare cluster or empty namespace** → a working,
+restored Nextcloud), use the wrapper. It re-attaches the off-cluster archive
+(static NFS PV → PVC), bootstraps Secrets, `helm install`s the chart, and runs
+the restore — in one **idempotent** command. You need only your **values
+overlay** and the **archive**; Secrets are regenerated (the restore converges DB
+creds to them, and the backed-up `instanceid`/`secret`/`passwordsalt` ride in
+from the archive):
+
+```bash
+scripts/dr-restore.sh \
+  --values path/to/your-values.yaml \
+  [--archive latest|backup-<TS>.tar] [--whiteboard] [--metrics]
+```
+
+Defaults: namespace `nextcloud`, release `nextcloud-stack`, archive `latest`, and
+the backup NAS at `10.0.0.13:/mnt/datapool/Shares/k3s/nextcloud-backups`
+(override with `--namespace`/`--release`/`--server`/`--share`/`--subdir`). Add
+`--dry-run` to print every step first, or `--skip-bootstrap` if the Secrets
+already exist. Re-running converges (Secrets skipped, helm upgraded in place, a
+fresh restore Job).
+
+### Restoring into an already-running instance (what the wrapper runs)
+
+If the chart is already installed and healthy and you just want to roll the data
+back, clone the backup CronJob into a one-shot restore Job directly — this is
+exactly the wrapper's last step:
 
 ```bash
 NS=nextcloud REL=nextcloud-stack
 # RESTORE_ARCHIVE: a specific backup-<TS>.tar, or 'latest'
 kubectl -n $NS create job restore-$(date +%s) --from=cronjob/$REL-backup \
   --dry-run=client -o json \
-| jq '.spec.template.spec.containers[0].env += [
-    {"name":"MODE","value":"restore"},
-    {"name":"RESTORE_ARCHIVE","value":"latest"}]' \
+| jq 'del(.spec.template.spec.initContainers)
+    | .spec.template.spec.containers[0].env += [
+        {"name":"MODE","value":"restore"},
+        {"name":"RESTORE_ARCHIVE","value":"latest"}]' \
 | kubectl create -f -
 kubectl -n $NS logs -f job/$(kubectl -n $NS get job -o name --sort-by=.metadata.creationTimestamp | tail -1 | cut -d/ -f2)
 ```
+
+(`del(.initContainers)` drops the `pg-dump` init — a restore has nothing to dump.)
 
 What the restore does, in order:
 
@@ -171,12 +201,16 @@ kubectl -n nextcloud logs -f job/manual-backup
 
 ## What else to back up
 
-- **The source Secrets** (admin, postgres, valkey, …). They're not in the data/DB
-  backup. Keep them in your secrets manager or a sealed/SOPS file.
-- **Your values overlay** (`my-values.yaml`) — under version control.
+- **Your values overlay** (`my-values.yaml`) — under version control. This is
+  the one input `dr-restore.sh` *requires* (besides the archive).
+- **The source Secrets** (admin, postgres, valkey, …) — *recommended* but not
+  required: `dr-restore.sh` regenerates fresh ones and the restore converges to
+  them. Keep your own copy only if you want the exact same admin/DB passwords
+  back (e.g. external tooling pinned to them); a sealed/SOPS file or secrets
+  manager is the place.
 
-With those three (Secrets, values, data+DB backup) you can rebuild the instance
-from scratch.
+So in practice **values overlay + the archive** are enough to rebuild from
+scratch with `dr-restore.sh`; saved Secrets are a convenience on top.
 
 ---
 
