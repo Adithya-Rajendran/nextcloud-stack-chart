@@ -33,7 +33,9 @@ spec:
   failedJobsHistoryLimit: {{ .Values.backup.failedJobsHistoryLimit }}
   jobTemplate:
     spec:
-      backoffLimit: 1
+      # Was 1. A transient (DB briefly not-Ready, a control-plane blip) must not
+      # lose the whole day's backup — retry a few times within the schedule.
+      backoffLimit: 6
       activeDeadlineSeconds: {{ .Values.backup.activeDeadlineSeconds }}
       template:
         metadata:
@@ -47,6 +49,36 @@ spec:
             {{- toYaml .Values.backup.podSecurityContext | nindent 12 }}
 {{- if .Values.postgres.enabled }}
           initContainers:
+            # Block until Postgres is resolvable AND accepting connections
+            # before the dump runs. The headless postgres Service publishes a
+            # DNS A record ONLY for READY endpoints, so a brief not-Ready window
+            # at backup time returns NXDOMAIN and pg_dumpall fails instantly;
+            # waiting here (bounded by startingDeadlineSeconds/activeDeadlineSeconds)
+            # turns that transient into a short wait, so a daily backup is no
+            # longer lost to a momentary Postgres restart. Uses the backup image
+            # (alpine/k8s) for its shell + nc — the DHI Postgres image is shell-less.
+            - name: wait-for-db
+              image: {{ include "nextcloud-stack.image" .Values.backup.image }}
+              imagePullPolicy: {{ .Values.backup.image.pullPolicy }}
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  echo "waiting for postgres at $PGHOST:$PGPORT ..."
+                  until nc -w 3 "$PGHOST" "$PGPORT" </dev/null >/dev/null 2>&1; do
+                    sleep 3
+                  done
+                  echo "postgres $PGHOST:$PGPORT is reachable"
+              securityContext:
+                {{- toYaml .Values.backup.containerSecurityContext | nindent 16 }}
+              env:
+                - { name: HOME,   value: /tmp }
+                - { name: PGHOST, value: {{ include "nextcloud-stack.postgres.host" . | quote }} }
+                - { name: PGPORT, value: {{ .Values.postgres.service.port | quote }} }
+              resources:
+                {{- toYaml .Values.backup.resources | nindent 16 }}
+              volumeMounts:
+                - { name: tmp, mountPath: /tmp }
             # Dump Postgres OVER THE SERVICE — NOT `kubectl exec` — so a flaky
             # kubelet proxy on the postgres node can no longer 502 the dump.
             # Uses the chart's OWN Postgres image (pg_dumpall present, major

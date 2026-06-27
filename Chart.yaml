@@ -8,7 +8,7 @@ description: |
 type: application
 
 # Chart version — bump on chart changes.
-version: 0.8.0
+version: 0.8.1
 
 # Pinned to the custom fpm image's Nextcloud version.
 # When bumping Nextcloud, bump this AND values.yaml `nextcloud.image.tag`.
@@ -35,6 +35,10 @@ dependencies: []
 annotations:
   # Bumped each time the *manifest* shape changes meaningfully.
   artifacthub.io/changes: |
+    - kind: fixed
+      description: "Backup no longer silently loses a day's DB dump when Postgres is briefly not-Ready at backup time. A new `wait-for-db` initContainer (backup image — the DHI Postgres image is shell-less) blocks until the Postgres Service is resolvable AND accepting TCP connections before `pg_dumpall` runs. The headless Service publishes DNS only for READY endpoints, so a momentary Postgres restart previously returned NXDOMAIN and failed the dump instantly; it is now retried (bounded by startingDeadlineSeconds/activeDeadlineSeconds). Backup Job backoffLimit raised 1 -> 6."
+    - kind: fixed
+      description: "occ-cron Job backoffLimit raised 1 -> 3 so a transient apiserver->kubelet streaming-proxy 502 (observed during control-plane blips) retries within the 5-minute schedule instead of failing the run outright."
     - kind: fixed
       description: "Backup no longer fails on the flaky kubelet-proxy 502: the Postgres dump is now produced by a `pg-dump` initContainer that runs pg_dumpall OVER THE SERVICE (reusing the chart's own Postgres image, via libpq PG* env — no shell/gzip needed, works on the DHI image), instead of `kubectl exec` into the postgres pod. The single-archive format (pg.sql.gz + files.tar.gz + meta) is unchanged, so restore is unaffected. pg_dumpall connects as the `postgres` superuser (postgres-admin-password) under manageAppRole."
     - kind: changed
