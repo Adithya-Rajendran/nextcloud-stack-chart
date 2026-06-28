@@ -30,7 +30,10 @@ spec:
   failedJobsHistoryLimit: {{ .Values.nextcloud.cronJob.failedJobsHistoryLimit }}
   jobTemplate:
     spec:
-      backoffLimit: 1
+      # Was 1. The exec runs through the apiserver->kubelet streaming proxy,
+      # which can 502 during a control-plane blip; retry within the schedule
+      # (concurrencyPolicy: Forbid still prevents overlapping runs).
+      backoffLimit: 3
       activeDeadlineSeconds: {{ .Values.nextcloud.cronJob.activeDeadlineSeconds }}
       template:
         metadata:
