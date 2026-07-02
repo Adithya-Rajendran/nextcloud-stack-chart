@@ -17,6 +17,9 @@ below) — with RWO a second replica deadlocks on a Multi-Attach error.
 {{- if and .Values.valkey.enabled .Values.valkey.auth.enabled -}}
 {{- include "nextcloud-stack.requireSecret" (dict "existing" .Values.valkey.auth.existingSecret "section" "valkey.auth") -}}
 {{- end -}}
+{{- if .Values.sso.enabled -}}
+{{- include "nextcloud-stack.requireSecret" (dict "existing" .Values.sso.auth.existingSecret "section" "sso.auth") -}}
+{{- end -}}
 {{- if and .Values.nextcloud.web.selfConnect.enabled (not .Values.nextcloud.web.selfConnect.tlsSecret) -}}
 {{- fail "nextcloud.web.selfConnect.enabled requires nextcloud.web.selfConnect.tlsSecret — a kubernetes.io/tls Secret valid for nextcloud.settings.overwriteHost (e.g. a cert-manager Let's Encrypt cert in this namespace)." -}}
 {{- end -}}
@@ -241,6 +244,16 @@ spec:
             # value as NC-Token).
             - name: SERVERINFO_TOKEN
               valueFrom: { secretKeyRef: { name: {{ .Values.metrics.auth.existingSecret }}, key: {{ .Values.metrics.auth.tokenKey }} } }
+{{- end }}
+{{- if .Values.sso.enabled }}
+            # OIDC client credentials for user_oidc. Not consumed by fpm itself —
+            # the db-migrate Job reads them from this pod's env and registers the
+            # provider via `occ user_oidc:provider` (secret passed via env where
+            # the CLI supports --clientsecret-env, never rendered into manifests).
+            - name: OIDC_CLIENT_ID
+              valueFrom: { secretKeyRef: { name: {{ .Values.sso.auth.existingSecret }}, key: client-id } }
+            - name: OIDC_CLIENT_SECRET
+              valueFrom: { secretKeyRef: { name: {{ .Values.sso.auth.existingSecret }}, key: client-secret } }
 {{- end }}
           ports:
             - name: fpm

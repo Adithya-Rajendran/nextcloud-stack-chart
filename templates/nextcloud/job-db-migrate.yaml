@@ -188,6 +188,47 @@ spec:
                 echo "WARNING: SERVERINFO_TOKEN not present in this pod — serverinfo token NOT set" >&2
               fi
 {{- end }}
+{{- if .Values.sso.enabled }}
+              # ---- SSO: user_oidc app + provider upsert (idempotent) --------
+              # `user_oidc:provider` is an upsert keyed on the identifier, so
+              # re-running on every deploy converges. Credentials come from the
+              # php pod's env (set on the Deployment from sso.auth.existingSecret).
+              echo "==> ensuring user_oidc app is installed"
+              if out=$(php -f /var/www/html/occ -- app:install user_oidc -n 2>&1); then
+                printf '%s\n' "$out"
+              else
+                printf '%s\n' "$out"
+                if printf '%s' "$out" | grep -qiE 'already (installed|enabled|active)'; then
+                  php -f /var/www/html/occ -- app:enable user_oidc -n
+                else
+                  echo "occ app:install user_oidc failed unexpectedly — see output above" >&2
+                  exit 1
+                fi
+              fi
+              if [ -z "${OIDC_CLIENT_ID:-}" ] || [ -z "${OIDC_CLIENT_SECRET:-}" ]; then
+                echo "WARNING: OIDC_CLIENT_ID/OIDC_CLIENT_SECRET missing from pod env — provider NOT configured" >&2
+              else
+                echo "==> upserting user_oidc provider {{ .Values.sso.provider.identifier }}"
+                # Prefer --clientsecret-env (secret never in argv); fall back for
+                # older user_oidc releases that predate the flag.
+                if php -f /var/www/html/occ -- user_oidc:provider --help 2>/dev/null | grep -q 'clientsecret-env'; then
+                  secret_args="--clientsecret-env OIDC_CLIENT_SECRET"
+                else
+                  secret_args="--clientsecret $OIDC_CLIENT_SECRET"
+                fi
+                php -f /var/www/html/occ -- user_oidc:provider {{ .Values.sso.provider.identifier | quote }} \
+                  --clientid "$OIDC_CLIENT_ID" \
+                  $secret_args \
+                  --discoveryuri {{ required "sso.provider.discoveryUri is required when sso.enabled" .Values.sso.provider.discoveryUri | quote }} \
+                  --scope {{ .Values.sso.provider.scope | quote }} \
+                  --unique-uid={{ ternary "1" "0" .Values.sso.provider.uniqueUid }} \
+                  --group-provisioning={{ ternary "1" "0" .Values.sso.provider.groupProvisioning }} \
+                  --mapping-uid {{ .Values.sso.provider.mappings.uid | quote }} \
+                  --mapping-display-name {{ .Values.sso.provider.mappings.displayName | quote }} \
+                  --mapping-email {{ .Values.sso.provider.mappings.email | quote }} \
+                  --mapping-groups {{ .Values.sso.provider.mappings.groups | quote }} -n
+              fi
+{{- end }}
 
               echo "db-migrate: OK"
           resources:

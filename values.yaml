@@ -896,3 +896,38 @@ backup:
       drop: ["ALL"]
     seccompProfile:
       type: RuntimeDefault
+
+# ---------------------------------------------------------------------------
+# SSO / OIDC login (user_oidc) — optional add-on.
+# The db-migrate Job installs the user_oidc app and UPSERTS the provider below
+# on every deploy (idempotent — `occ user_oidc:provider` is keyed on the
+# identifier), so connecting Nextcloud to an IdP is fully declarative: no
+# admin-UI steps. Client credentials are EXTERNAL-ONLY (existingSecret), same
+# security model as whiteboard/metrics: the Deployment exposes them to the php
+# container env and the Job reads them from there — never from values/argv.
+sso:
+  enabled: false
+
+  # External Secret (created by scripts/bootstrap-secrets.sh --sso).
+  # Keys: client-id, client-secret — must match the provider registered at the
+  # IdP (e.g. an authentik OAuth2 provider blueprint using the same secret).
+  auth:
+    existingSecret: ""    # REQUIRED when enabled
+
+  provider:
+    # occ provider identifier (also shown on the login button).
+    identifier: authentik
+    # OIDC discovery document of the IdP application, e.g.
+    # https://authentik.example.com/application/o/nextcloud/.well-known/openid-configuration
+    discoveryUri: ""      # REQUIRED when enabled (render fails otherwise)
+    scope: "openid email profile"
+    # Hash the IdP subject into a unique NC user id. Leave false when the IdP
+    # already sends stable unique subs (e.g. authentik sub_mode=user_uuid).
+    uniqueUid: false
+    # Create/sync NC groups from the groups claim.
+    groupProvisioning: false
+    mappings:
+      uid: preferred_username
+      displayName: name
+      email: email
+      groups: groups
