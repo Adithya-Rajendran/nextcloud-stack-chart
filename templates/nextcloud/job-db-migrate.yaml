@@ -9,6 +9,13 @@ Why post-upgrade (not pre-upgrade):
     against the old code, which is wrong.
   - Post-upgrade fires after the new Pod is rolled in. Correct timing.
 
+The migrate container runs a THIN bash wrapper (shell+kubectl image — same
+family as the backup CronJob) purely to capture the exec output: a fresh
+`occ app:install` prints a sentinel, and fpm's APCu app cache only sees new
+apps after a restart, so the wrapper conditionally `kubectl rollout restart`s
+the Deployment (dbMigrateJob.restartOnAppInstall). All occ logic still runs
+INSIDE the nextcloud pod via one kubectl exec.
+
 Why kubectl exec (not a Pod that mounts the PVC):
   - The PVC is RWO Cinder and the live Pod has it. A second mount fails
     Multi-Attach (the v1.11 bug). Exec sidesteps the volume entirely.
@@ -77,8 +84,8 @@ spec:
             - { name: kube, mountPath: /.kube }
       containers:
         - name: migrate
-          image: {{ include "nextcloud-stack.image" .Values.nextcloud.kubectl.image }}
-          imagePullPolicy: {{ .Values.nextcloud.kubectl.image.pullPolicy }}
+          image: {{ include "nextcloud-stack.image" .Values.nextcloud.dbMigrateJob.shellImage }}
+          imagePullPolicy: {{ .Values.nextcloud.dbMigrateJob.shellImage.pullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -86,19 +93,16 @@ spec:
               drop: ["ALL"]
           env:
             - { name: HOME, value: /tmp }
-          # One `kubectl exec` — all multi-step logic runs INSIDE the nextcloud
-          # pod (which has bash). The outer pod never invokes a shell.
+            - name: RESTART_ON_APP_INSTALL
+              value: {{ ternary "1" "0" .Values.nextcloud.dbMigrateJob.restartOnAppInstall | quote }}
+          # One `kubectl exec` still carries ALL occ logic into the nextcloud pod;
+          # the outer bash only tees the output and conditionally restarts the
+          # Deployment when a fresh app install is detected (see header comment).
+          command: ["bash", "-ec"]
           args:
-            - exec
-            - --namespace
-            - {{ .Release.Namespace }}
-            - deploy/{{ $fullname }}
-            - --container
-            - php
-            - --
-            - sh
-            - -c
             - |
+              set -o pipefail
+              cat > /tmp/nc-migrate-inner.sh <<'NC_INNER_EOF'
               set -eu
 
               # ---- DB migrations (idempotent) -------------------------------
@@ -127,6 +131,7 @@ spec:
               echo "==> ensuring files_antivirus app is installed"
               if out=$(php -f /var/www/html/occ -- app:install files_antivirus -n 2>&1); then
                 printf '%s\n' "$out"
+                echo "__NC_APP_FRESHLY_INSTALLED__ files_antivirus"
               else
                 printf '%s\n' "$out"
                 if printf '%s' "$out" | grep -qE 'already (installed|enabled|active)'; then
@@ -154,6 +159,7 @@ spec:
               echo "==> ensuring whiteboard app is installed"
               if out=$(php -f /var/www/html/occ -- app:install whiteboard -n 2>&1); then
                 printf '%s\n' "$out"
+                echo "__NC_APP_FRESHLY_INSTALLED__ whiteboard"
               else
                 printf '%s\n' "$out"
                 if printf '%s' "$out" | grep -qE 'already (installed|enabled|active)'; then
@@ -196,6 +202,7 @@ spec:
               echo "==> ensuring user_oidc app is installed"
               if out=$(php -f /var/www/html/occ -- app:install user_oidc -n 2>&1); then
                 printf '%s\n' "$out"
+                echo "__NC_APP_FRESHLY_INSTALLED__ user_oidc"
               else
                 printf '%s\n' "$out"
                 if printf '%s' "$out" | grep -qiE 'already (installed|enabled|active)'; then
@@ -231,6 +238,14 @@ spec:
 {{- end }}
 
               echo "db-migrate: OK"
+              NC_INNER_EOF
+              kubectl exec --namespace {{ .Release.Namespace }} deploy/{{ $fullname }} --container php -- \
+                sh -c "$(cat /tmp/nc-migrate-inner.sh)" 2>&1 | tee /tmp/nc-migrate.out
+              if [ "$RESTART_ON_APP_INSTALL" = "1" ] && grep -q '__NC_APP_FRESHLY_INSTALLED__' /tmp/nc-migrate.out; then
+                echo "==> freshly installed app(s) detected — restarting {{ $fullname }} so fpm picks them up"
+                kubectl rollout restart deployment/{{ $fullname }} --namespace {{ .Release.Namespace }}
+                kubectl rollout status deployment/{{ $fullname }} --namespace {{ .Release.Namespace }} --timeout={{ .Values.nextcloud.dbMigrateJob.rolloutStatusTimeoutSeconds }}s
+              fi
           resources:
             {{- toYaml .Values.nextcloud.dbMigrateJob.resources | nindent 12 }}
           volumeMounts:

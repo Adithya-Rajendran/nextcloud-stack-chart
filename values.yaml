@@ -301,6 +301,23 @@ nextcloud:
 
   dbMigrateJob:
     enabled: true
+    # Newly-installed apps (files_antivirus / whiteboard / user_oidc) are invisible
+    # to the RUNNING fpm workers until php-fpm restarts (APCu app cache is per-SAPI;
+    # occ can't flush fpm's copy) — routes 404 until then. When true, the Job
+    # detects a FRESH app install (not the already-installed path) and performs a
+    # `kubectl rollout restart` + waits for the rollout. Only fires on first
+    # install of an app, never on ordinary re-syncs/upgrades.
+    restartOnAppInstall: true
+    # The conditional restart needs an outer shell to inspect the exec output, so
+    # the migrate container uses this shell+kubectl image (same family the backup
+    # CronJob already uses) instead of the shell-less dhi kubectl image.
+    shellImage:
+      registry: docker.io
+      repository: alpine/k8s
+      tag: "1.31.7"
+      # Pin via scripts/pin-digests.sh (overrides tag when set).
+      digest: ""
+      pullPolicy: IfNotPresent
     resources:
       requests: { cpu: 50m, memory: 64Mi }
       limits:   { cpu: 500m, memory: 256Mi }
