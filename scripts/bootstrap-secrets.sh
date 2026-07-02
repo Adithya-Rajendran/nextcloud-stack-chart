@@ -10,7 +10,7 @@
 # Usage:
 #   bootstrap-secrets.sh [--namespace NS] [--release RELEASE] [--force]
 #                        [--kubeconfig PATH] [--cloudflare-token TOKEN]
-#                        [--whiteboard] [--metrics]
+#                        [--whiteboard] [--metrics] [--sso]
 #
 # Defaults:
 #   --namespace nextcloud
@@ -26,6 +26,7 @@
 #   <release>-valkey      keys: valkey-password, valkey.conf
 #   <release>-whiteboard  keys: jwt-secret-key, redis-url   (only with --whiteboard)
 #   <release>-metrics     key:  token   (only with --metrics)
+#   <release>-sso         keys: client-id, client-secret   (only with --sso)
 #   <release>-cloudflared key:  tunnel-token   (only with --cloudflare-token)
 #
 # Admin password is printed once at the end — save it in your password manager.
@@ -38,6 +39,7 @@ FORCE=0
 CF_TOKEN=""
 WB=0
 MET=0
+SSO=0
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 while [[ $# -gt 0 ]]; do
@@ -48,6 +50,7 @@ while [[ $# -gt 0 ]]; do
     --cloudflare-token) CF_TOKEN="$2"; shift 2 ;;
     --whiteboard)   WB=1; shift ;;
     --metrics)      MET=1; shift ;;
+    --sso)          SSO=1; shift ;;
     --kubeconfig)   export KUBECONFIG="$2"; shift 2 ;;
     -h|--help)
       sed -n '1,/^set -euo/p' "$0" | sed '$d'
@@ -119,6 +122,7 @@ PG_ADMIN_PW="$(gen_pw 32)"
 VALKEY_PW="$(gen_pw 32)"
 WB_JWT="$(gen_pw 48)"
 MET_TOKEN="$(gen_pw 48)"
+SSO_SECRET="$(gen_pw 48)"
 
 # Valkey config with requirepass baked in. Mirror of templates/valkey/secret.yaml
 # (the chart no longer renders that template — see SECRET note in values.yaml).
@@ -186,6 +190,17 @@ if [[ "$MET" -eq 1 ]]; then
   printf "%s" "$MET_TOKEN" > "$TMP/token"
   create_or_skip "${RELEASE}-metrics" \
     --from-file=token="$TMP/token"
+fi
+
+# SSO / OIDC client credentials (optional) — consumed by sso.auth.existingSecret.
+# client-id defaults to "nextcloud"; register the SAME id/secret at your IdP
+# (e.g. an authentik OAuth2 provider blueprint reading the secret via !Env).
+if [[ "$SSO" -eq 1 ]]; then
+  printf "%s" "nextcloud"   > "$TMP/client-id"
+  printf "%s" "$SSO_SECRET" > "$TMP/client-secret"
+  create_or_skip "${RELEASE}-sso" \
+    --from-file=client-id="$TMP/client-id" \
+    --from-file=client-secret="$TMP/client-secret"
 fi
 
 # Cloudflare tunnel token (optional) — consumed by cloudflare.tunnel.existingSecret.

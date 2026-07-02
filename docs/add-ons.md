@@ -88,6 +88,31 @@ the runtime.
 
 ---
 
+## SSO / OIDC login (user_oidc)
+
+Connects Nextcloud login to an OIDC IdP (tested with authentik) with **zero
+manual steps** — the db-migrate Job installs `user_oidc` and upserts the
+provider on every deploy.
+
+```bash
+./scripts/bootstrap-secrets.sh --sso     # creates <release>-sso (client-id/client-secret)
+```
+
+```yaml
+sso:
+  enabled: true
+  auth:
+    existingSecret: nextcloud-stack-sso
+  provider:
+    identifier: authentik
+    discoveryUri: https://authentik.example.com/application/o/nextcloud/.well-known/openid-configuration
+```
+
+Register the same client-id/secret at the IdP. For authentik, a blueprint can
+read the secret via `!Env` so both sides stay declarative; redirect URI is
+`https://<overwriteHost>/apps/user_oidc/code`. Re-running is safe: the provider
+upsert is keyed on `identifier`.
+
 ## Office / Collabora (not included)
 
 Document editing (Collabora Online / Nextcloud Office) is **not** part of this
