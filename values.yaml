@@ -221,6 +221,12 @@ nextcloud:
       - localhost
       - nextcloud.example.com
     defaultPhoneRegion: US
+    # Allow SERVER-SIDE HTTP requests to private/LAN addresses (Nextcloud blocks
+    # them by default). Required when a backend the server itself calls — e.g. an
+    # OIDC IdP (sso.provider.discoveryUri), S3, or Collabora — resolves to an
+    # RFC1918 IP such as an in-cluster gateway VIP. Rendered into
+    # zz-chart.config.php as `allow_local_remote_servers`.
+    allowLocalRemoteServers: false
     maintenanceWindowStart: 11
     # Upload / memory tuning.
     maxFileUploadSize: 16G

@@ -35,6 +35,12 @@ data:
         // gating the overwrite on a pod-CIDR regex would never match a real
         // public client and the rewrites would silently no-op.
 
+{{- if .Values.nextcloud.settings.allowLocalRemoteServers }}
+        // Server-side HTTP to private/LAN addresses (OIDC IdP / S3 / Collabora
+        // behind the same gateway). See values: settings.allowLocalRemoteServers.
+        'allow_local_remote_servers' => true,
+
+{{- end }}
         'trusted_domains' => [
 {{- range $i, $d := .Values.nextcloud.settings.trustedDomains }}
             {{ $i }} => '{{ $d }}',
