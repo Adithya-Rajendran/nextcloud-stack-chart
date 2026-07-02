@@ -31,3 +31,43 @@ data:
     cp "$SRC" "$DST"
     chmod 640 "$DST"
     echo "before-starting: wrote $DST"
+{{- if or .Values.sso.enabled .Values.clamav.enabled }}
+  20-ensure-apps.sh: |
+    #!/bin/sh
+    # Ensure chart-managed apps exist BEFORE php-fpm starts. This closes the
+    # first-install race where the db-migrate Job installs an app into a pod
+    # whose fpm workers have already cached the (stale) app list — new app
+    # routes would 404 until a pod restart. Installing here means fpm never
+    # boots without the app. Best-effort by design: a transient app-store
+    # failure must not block the pod (the db-migrate Job re-runs the install
+    # as a backstop, and Nextcloud works without the app in the meantime).
+    # Skips cleanly before maintenance:install has ever run (fresh PVC).
+    set -u
+    occ() { php -f /var/www/html/occ -- "$@"; }
+    if ! occ status -n 2>/dev/null | grep -q "installed: true"; then
+        echo "before-starting: nextcloud not installed yet — skipping app ensure"
+        exit 0
+    fi
+    ensure_app() {
+        app="$1"
+        if occ app:enable "$app" -n 2>/dev/null; then
+            echo "before-starting: app $app present + enabled"
+            return 0
+        fi
+        echo "before-starting: installing app $app"
+        if out=$(occ app:install "$app" -n 2>&1); then
+            printf '%s\n' "$out"
+        else
+            printf '%s\n' "$out"
+            echo "before-starting: WARNING — could not install $app now; the db-migrate Job will retry" >&2
+        fi
+        return 0
+    }
+{{- if .Values.sso.enabled }}
+    ensure_app user_oidc
+{{- end }}
+{{- if .Values.clamav.enabled }}
+    ensure_app files_antivirus
+{{- end }}
+    exit 0
+{{- end }}
