@@ -8,7 +8,7 @@ description: |
 type: application
 
 # Chart version — bump on chart changes.
-version: 0.9.0
+version: 0.9.1
 
 # Pinned to the custom fpm image's Nextcloud version.
 # When bumping Nextcloud, bump this AND values.yaml `nextcloud.image.tag`.
@@ -36,6 +36,4 @@ annotations:
   # Bumped each time the *manifest* shape changes meaningfully.
   artifacthub.io/changes: |
     - kind: added
-      description: "SSO / OIDC login add-on (`sso.*`): the db-migrate Job now installs the user_oidc app and idempotently UPSERTS an OIDC provider (`occ user_oidc:provider`) on every deploy, making IdP wiring fully declarative — no admin-UI steps. Client credentials follow the chart's external-Secret model (sso.auth.existingSecret, keys client-id/client-secret) and reach occ via the php pod's env; the secret is passed with --clientsecret-env where the installed user_oidc supports it (never in argv), with a safe fallback for older releases. Render fails fast when sso.enabled without existingSecret/discoveryUri."
-    - kind: added
-      description: "scripts/bootstrap-secrets.sh --sso: creates <release>-sso with client-id (nextcloud) + a generated client-secret; register the same pair at the IdP (e.g. via an authentik blueprint reading the secret through !Env)."
+      description: "nextcloud.settings.allowLocalRemoteServers (default false): renders `allow_local_remote_servers => true` into the chart config overlay. Needed whenever the server itself calls a backend that resolves to a private/LAN IP — e.g. the sso OIDC discovery endpoint behind the same in-cluster gateway VIP (Nextcloud's HTTP client refuses RFC1918 targets by default, failing user_oidc with 'Could not reach the provider'). Previously this had to be set imperatively via occ."
