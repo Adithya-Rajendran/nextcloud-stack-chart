@@ -15,9 +15,10 @@
 #              (`go install github.com/google/go-containerregistry/cmd/crane@latest`)
 #   - yq       https://github.com/mikefarah/yq
 #
-# The default images include dhi.io (a private, subscription registry): run
-# `crane auth login dhi.io` first. Public-overlay users: render a merged values
-# file (helm template ... --show-only is not enough) and point this script at it.
+# The default images include dhi.io (a private registry; a FREE Docker account
+# is enough to pull): run `crane auth login dhi.io` first. Public-overlay users:
+# render a merged values file (helm template ... --show-only is not enough) and
+# point this script at it.
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -33,10 +34,12 @@ PATHS=(
   .nextcloud.image
   .nextcloud.web.image
   .nextcloud.kubectl.image
+  .nextcloud.dbMigrateJob.shellImage
   .postgres.image
   .valkey.image
   .clamav.image
   .whiteboard.image
+  .metrics.image
   .cloudflare.tunnel.image
   .tests.image
   .backup.image

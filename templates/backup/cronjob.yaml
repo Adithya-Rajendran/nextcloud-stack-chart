@@ -130,6 +130,8 @@ spec:
                 - { name: NC_DEPLOY,        value: {{ include "nextcloud-stack.nextcloud.fullname" . | quote }} }
                 - { name: RETENTION_DAYS,   value: {{ .Values.backup.retentionDays | quote }} }
                 - { name: MAINTENANCE_MODE, value: {{ .Values.backup.maintenanceMode | quote }} }
+                - { name: BACKUP_FILES_TIMEOUT, value: {{ .Values.backup.filesTimeout | quote }} }
+                - { name: BACKUP_FILES_RETRIES, value: {{ .Values.backup.filesRetries | quote }} }
 {{- if .Values.postgres.enabled }}
                 - { name: PG_DUMP_FILE,     value: /pgdump/pg.sql }
 {{- end }}

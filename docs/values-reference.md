@@ -2,7 +2,9 @@
 
 Every configurable value, grouped by block, with defaults. The authoritative,
 always-current source is [`values.yaml`](../values.yaml) (heavily commented) — this
-page is the organised companion. Defaults below are for chart **0.3.0**.
+page is the organised companion. Image tags and the chart version drift fastest;
+when in doubt, [`values.yaml`](../values.yaml) and [`Chart.yaml`](../Chart.yaml)
+are canonical.
 
 > Convention: only the keys you're likely to set are listed in full. Image blocks
 > all share the same shape (`registry`, `repository`, `tag`, `digest`,
@@ -32,10 +34,10 @@ image:
   pullPolicy: IfNotPresent
 ```
 
-Defaults: php `ghcr.io/adithya-rajendran/nextcloud-fpm:33.0.3-fpm`,
+Defaults: php `ghcr.io/adithya-rajendran/nextcloud-fpm:33.0.5-fpm`,
 web `dhi.io/nginx:1-compat`, postgres `dhi.io/postgres:18`, valkey `dhi.io/valkey:9`,
 clamav `dhi.io/clamav:1.5-base`, kubectl `dhi.io/kubectl:1`,
-curl `dhi.io/curl:8-alpine3.23`, whiteboard `ghcr.io/nextcloud-releases/whiteboard:v1.5.3`,
+curl `dhi.io/curl:8-alpine3.23`, whiteboard `ghcr.io/nextcloud-releases/whiteboard:v1.5.9`,
 metrics `ghcr.io/xperimental/nextcloud-exporter:0.9.1`,
 cloudflared `docker.io/cloudflare/cloudflared:2024.12.2`.
 
@@ -188,7 +190,7 @@ See [Security › NetworkPolicy](security.md#networkpolicy-requires-cilium).
 | `whiteboard.enabled` | `false` | |
 | `whiteboard.replicas` | `2` | `>1` needs `storageStrategy: redis` + Valkey. |
 | `whiteboard.storageStrategy` | `redis` | `lww` = single-instance only. |
-| `whiteboard.nextcloudUrl` | `https://nextcloud.example.com` | Backend → Nextcloud. |
+| `whiteboard.nextcloudUrl` | `""` (in-cluster svc) | Backend → Nextcloud. Empty ⇒ in-cluster Service; set a public URL only to route it through your proxy. |
 | `whiteboard.publicUrl` | `""` | Browser-facing; use same host as Nextcloud. |
 | `whiteboard.auth.existingSecret` | `""` **(required when enabled)** | Keys `jwt-secret-key`, `redis-url`. |
 | `whiteboard.service.port` | `3002` | |
@@ -212,9 +214,23 @@ See [Monitoring](monitoring.md).
 | `backup.schedule` | `30 2 * * *` | |
 | `backup.retentionDays` | `14` | |
 | `backup.maintenanceMode` | `false` | Freeze writes (`occ maintenance:mode`) during the run for a fully consistent dump↔files pair; costs user-facing downtime. |
-| `backup.persistence.existingClaim` / `.size` / `.storageClassName` | `""` / `10Gi` / `""` | Point at off-cluster storage. |
+| `backup.persistence.existingClaim` / `.size` / `.storageClassName` | `""` / `100Gi` / `""` | Point at off-cluster storage. |
+| `backup.persistence.accessModes` | `["ReadWriteOnce"]` | Use `["ReadWriteMany"]` only with an RWX `storageClassName` (e.g. NFS). |
 
 See [Backup & Restore](backup-and-restore.md).
+
+### `sso` (OIDC via user_oidc)
+| Value | Default | Notes |
+|---|---|---|
+| `sso.enabled` | `false` | Installs/configures `user_oidc` via the db-migrate Job. |
+| `sso.auth.existingSecret` | `""` **(required when enabled)** | Keys `client-id`, `client-secret`. |
+| `sso.provider.identifier` | `authentik` | occ provider id, shown on the login button. |
+| `sso.provider.discoveryUri` | `""` **(required when enabled)** | IdP OIDC discovery document URL. |
+| `sso.provider.scope` | `openid email profile` | |
+| `sso.provider.uniqueUid` / `.groupProvisioning` | `false` / `false` | |
+| `sso.provider.mappings.*` | `preferred_username` / `name` / `email` / `groups` | uid / displayName / email / groups claims. |
+
+See [Add-ons](add-ons.md).
 
 ### `tests`
 | Value | Default | Notes |

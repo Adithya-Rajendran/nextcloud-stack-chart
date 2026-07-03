@@ -67,7 +67,6 @@ CHART_NAME="nextcloud-stack"
 NAME_OVERRIDE=""
 FULLNAME_OVERRIDE=""
 VALKEY_PORT="6379"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -213,7 +212,7 @@ databases 16
 EOF
 )"
 
-TMP="$(mktemp -d)"; trap "rm -rf $TMP" EXIT
+TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 chmod 700 "$TMP"
 printf "%s" "admin"         > "$TMP/admin-user"
 printf "%s" "$ADMIN_PW"     > "$TMP/admin-password"

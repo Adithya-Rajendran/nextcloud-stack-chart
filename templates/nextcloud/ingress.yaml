@@ -32,6 +32,20 @@ spec:
     - host: {{ .Values.ingress.host | quote }}
       http:
         paths:
+{{- if .Values.whiteboard.enabled }}
+          # Whiteboard real-time-collaboration WebSocket, served on the SAME host
+          # as Nextcloud at /socket.io/ (no separate subdomain/cert, no
+          # cross-origin). More specific than "/", so it wins for /socket.io/.
+          # Point whiteboard.publicUrl at this same host. Some controllers also
+          # need a WebSocket/timeout annotation on this Ingress (see docs).
+          - path: /socket.io/
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "nextcloud-stack.whiteboard.fullname" . }}
+                port:
+                  number: {{ .Values.whiteboard.service.port }}
+{{- end }}
           - path: /
             pathType: {{ .Values.ingress.pathType }}
             backend:

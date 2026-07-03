@@ -1,8 +1,9 @@
 # Public-images overlay.
 #
-# The chart defaults to Docker Hardened Images (dhi.io), which need a paid Docker
-# subscription + an imagePullSecret. This overlay swaps every image for a public
-# Docker Hub equivalent so anyone can install the chart with no subscription.
+# The chart defaults to Docker Hardened Images (dhi.io), which need an
+# imagePullSecret to authenticate — a FREE Docker account is enough (no paid
+# subscription). This overlay swaps every image for a public Docker Hub
+# equivalent so anyone can install the chart with no registry login at all.
 #
 # Apply on TOP of your normal values:
 #   helm install nextcloud-stack . -n <ns> \
@@ -10,7 +11,7 @@
 #
 # UIDs differ from the DHI images, so the securityContexts are adjusted to match.
 
-# No subscription registry ⇒ no pull secret needed.
+# Public images ⇒ no pull secret needed.
 imagePullSecrets: []
 
 nextcloud:

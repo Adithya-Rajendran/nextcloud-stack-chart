@@ -20,6 +20,18 @@ WHAT'S RUNNING
 {{- if and .Values.cloudflare.enabled .Values.cloudflare.tunnel.enabled }}
   Deployment/{{ include "nextcloud-stack.cloudflared.fullname" . }}   cloudflared tunnel
 {{- end }}
+{{- if .Values.whiteboard.enabled }}
+  Deployment/{{ include "nextcloud-stack.whiteboard.fullname" . }}   Whiteboard backend ({{ .Values.whiteboard.replicas }} replica(s))
+{{- end }}
+{{- if .Values.metrics.enabled }}
+  Deployment/{{ include "nextcloud-stack.metrics.fullname" . }}   Prometheus exporter :{{ .Values.metrics.service.port }}
+{{- end }}
+{{- if .Values.backup.enabled }}
+  CronJob/{{ include "nextcloud-stack.backup.fullname" . }}   scheduled backups ({{ .Values.backup.schedule }})
+{{- end }}
+{{- if .Values.sso.enabled }}
+  SSO/OIDC   user_oidc provider "{{ .Values.sso.provider.identifier }}" (configured by the db-migrate Job)
+{{- end }}
 
 NEXT STEPS
 ----------
@@ -41,7 +53,7 @@ NEXT STEPS
 {{- else if .Values.gatewayApi.enabled }}
    A Gateway API HTTPRoute is enabled (parent Gateway: {{ .Values.gatewayApi.parentRef.name }}):
      kubectl -n {{ .Release.Namespace }} get httproute {{ include "nextcloud-stack.nextcloud.fullname" . }}
-   Point DNS for {{ .Values.gatewayApi.hostnames }} at the Gateway's address.
+   Point DNS for {{ join ", " .Values.gatewayApi.hostnames }} at the Gateway's address.
 {{- else if .Values.cloudflare.enabled }}
    The Cloudflare addon is enabled. In the Cloudflare dashboard, point the
    tunnel's Public Hostname at the Service:
@@ -51,12 +63,26 @@ NEXT STEPS
    the port-forward in step 2, or enable one of ingress / gatewayApi / cloudflare
    in your values and `helm upgrade`.
 {{- end }}
+{{- $npFlavor := .Values.networkPolicy.flavor | default "cilium" }}
+{{- $gatewayAutoAllowed := and .Values.gatewayApi.enabled (eq $npFlavor "cilium") }}
 {{- if and .Values.networkPolicy.enabled (not .Values.cloudflare.enabled) (not .Values.networkPolicy.nextcloudIngressFrom) (or .Values.ingress.enabled .Values.gatewayApi.enabled) }}
 
    ⚠  NetworkPolicy is ON but networkPolicy.nextcloudIngressFrom is empty and the
       Cloudflare addon is off. The Nextcloud Pod will REJECT traffic from your
-      ingress controller / gateway. Add its namespace/pod selector to
-      networkPolicy.nextcloudIngressFrom and `helm upgrade`.
+      ingress controller / gateway unless it is a Cilium Gateway (auto-allowed
+      via fromEntities:[ingress] with flavor=cilium). Add your front's
+      namespace/pod selector to networkPolicy.nextcloudIngressFrom and
+      `helm upgrade`.
+{{- if $gatewayAutoAllowed }}
+      (A Cilium Gateway is already allowed — ignore this if that's your front.)
+{{- end }}
+{{- end }}
+{{- if and .Values.networkPolicy.enabled .Values.metrics.enabled (not .Values.networkPolicy.metricsIngressFrom) }}
+
+   ⚠  metrics.enabled is ON but networkPolicy.metricsIngressFrom is empty. The
+      default-deny policy will BLOCK every Prometheus scrape of :9205. Add your
+      Prometheus namespace/pod selector to networkPolicy.metricsIngressFrom and
+      `helm upgrade`.
 {{- end }}
 
 4. First login:
@@ -82,9 +108,10 @@ NEXT STEPS
 
      kubectl get nodes -o jsonpath='{.items[*].spec.podCIDR}'
 {{- else }}
-5. Real client IP rewriting is OFF (nextcloud.web.realIp.trustedCidrs is empty).
-   Nextcloud will see your proxy's IP, not the visitor's. Set trustedCidrs to
-   your proxy's (ingress / gateway / cloudflared) pod CIDR to surface real IPs:
+{{- $realIpKnob := ternary "cloudflare.realIp.trustedCidrs" "nextcloud.web.realIp.trustedCidrs" .Values.cloudflare.enabled }}
+5. Real client IP rewriting is OFF ({{ $realIpKnob }} is empty).
+   Nextcloud will see your proxy's IP, not the visitor's. Set {{ $realIpKnob }}
+   to your proxy's (ingress / gateway / cloudflared) pod CIDR to surface real IPs:
 
      kubectl get nodes -o jsonpath='{.items[*].spec.podCIDR}'
 {{- end }}

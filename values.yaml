@@ -889,6 +889,11 @@ backup:
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
 
+  # The files tar `kubectl exec`s the live php Pod; bound it with a timeout and a
+  # small retry so a transient kubelet-proxy hiccup doesn't fail the whole run.
+  filesTimeout: "1800s"
+  filesRetries: 3
+
   image:
     registry: docker.io
     repository: alpine/k8s

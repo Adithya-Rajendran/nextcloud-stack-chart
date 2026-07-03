@@ -23,7 +23,7 @@ or the optional **Cloudflare tunnel addon**.
 
 | Component | Default image (DHI) | Notes |
 |---|---|---|
-| `php`   | `ghcr.io/adithya-rajendran/nextcloud-fpm:33.0.3-fpm` | PHP-FPM. The only custom image (public on GHCR). Built by [nextcloud-images](https://github.com/adithya-rajendran/nextcloud-images). UID 33. |
+| `php`   | `ghcr.io/adithya-rajendran/nextcloud-fpm:33.0.5-fpm` | PHP-FPM. The only custom image (public on GHCR). Built by [nextcloud-images](https://github.com/adithya-rajendran/nextcloud-images). UID 33. |
 | `web`   | `dhi.io/nginx:1-compat` | Sidecar in the same Pod. Listens 8080. UID 65532. |
 | `postgres` | `dhi.io/postgres:18` | StatefulSet, single replica, RWO. UID 70. |
 | `valkey` | `dhi.io/valkey:9` | Redis-wire-compatible. Auth on by default. UID 65532. |
