@@ -20,8 +20,10 @@ You'll need:
 
 Strongly recommended for the security features:
 
-- **Cilium** as your CNI — the chart's NetworkPolicy is a `CiliumNetworkPolicy`.
-  On another CNI you'll set `networkPolicy.enabled: false` (see
+- **Cilium** as your CNI — the chart's default NetworkPolicy is a
+  `CiliumNetworkPolicy`. On another policy-enforcing CNI set
+  `networkPolicy.flavor: kubernetes` for standard v1 policies; only use
+  `networkPolicy.enabled: false` if you have no policy enforcement at all (see
   [Security](security.md#networkpolicy-requires-cilium)).
 - A way to terminate TLS and route traffic in: an **ingress controller**, a
   **Gateway API** Gateway, or a **Cloudflare tunnel** (see

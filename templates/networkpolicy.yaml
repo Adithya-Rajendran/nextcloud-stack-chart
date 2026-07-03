@@ -309,6 +309,13 @@ spec:
             {{- include "nextcloud-stack.nextcloud.selectorLabels" . | nindent 12 }}
       toPorts:
         - ports: [{ port: {{ .Values.nextcloud.service.targetPort | quote }}, protocol: TCP }]
+{{- if .Values.whiteboard.nextcloudUrl }}
+    # An explicit whiteboard.nextcloudUrl routes the JWT/API callback OUT through
+    # the proxy (not the in-cluster Service), so allow HTTPS egress to "world".
+    - toEntities: [world]
+      toPorts:
+        - ports: [{ port: "443", protocol: TCP }]
+{{- end }}
 {{- if .Values.valkey.enabled }}
     # Valkey (shared HA board state)
     - toEndpoints:

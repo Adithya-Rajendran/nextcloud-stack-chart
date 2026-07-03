@@ -349,6 +349,16 @@ spec:
       ports:
         - port: {{ .Values.nextcloud.service.targetPort }}
           protocol: TCP
+{{- if .Values.whiteboard.nextcloudUrl }}
+    # An explicit whiteboard.nextcloudUrl routes the JWT/API callback OUT through
+    # the proxy — allow HTTPS egress to "world" (0.0.0.0/0 minus in-cluster ranges).
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16]
+      ports:
+        - { port: 443, protocol: TCP }
+{{- end }}
 {{- if .Values.valkey.enabled }}
     # Valkey (shared HA board state)
     - to:

@@ -287,6 +287,55 @@ Args (dict):
 {{- end -}}
 
 {{/*
+Fail render when an ENABLED component pulls from the dhi.io registry but no
+imagePullSecrets are set — that combination is a guaranteed ImagePullBackOff
+(dhi.io needs auth; a FREE Docker account is enough). The public-image overlay
+(-f values-public.yaml) swaps these to docker.io, so the guard stays quiet there.
+Create the pull Secret with `scripts/bootstrap-secrets.sh --dhi-username <u> --dhi-token <t>`
+and reference it via imagePullSecrets.
+*/}}
+{{- define "nextcloud-stack.requireImagePullSecret" -}}
+{{- if not .Values.imagePullSecrets -}}
+{{- $regs := list .Values.nextcloud.web.image.registry .Values.nextcloud.kubectl.image.registry -}}
+{{- if .Values.postgres.enabled -}}{{- $regs = append $regs .Values.postgres.image.registry -}}{{- end -}}
+{{- if .Values.valkey.enabled -}}{{- $regs = append $regs .Values.valkey.image.registry -}}{{- end -}}
+{{- if .Values.clamav.enabled -}}{{- $regs = append $regs .Values.clamav.image.registry -}}{{- end -}}
+{{- if .Values.tests.enabled -}}{{- $regs = append $regs .Values.tests.image.registry -}}{{- end -}}
+{{- if has "dhi.io" $regs -}}
+{{- fail "imagePullSecrets is empty but enabled components pull from dhi.io, which requires authentication — this install would ImagePullBackOff. Create the pull Secret with `scripts/bootstrap-secrets.sh --dhi-username <user> --dhi-token <docker-pat>` (a FREE Docker account is enough) and reference it, e.g. `imagePullSecrets: [{name: dhi-pull}]`. Or pass `-f values-public.yaml` to use public Docker Hub images with no pull secret." -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Guard the currently-dead postgres.enabled=false path. The chart has no
+external-database values, so a disabled in-cluster Postgres leaves Nextcloud
+pointed at a host that never comes up. Fail with an actionable message rather
+than shipping a silently-broken install.
+*/}}
+{{- define "nextcloud-stack.requirePostgres" -}}
+{{- if not .Values.postgres.enabled -}}
+{{- fail "postgres.enabled=false is not supported: this chart has no external-database configuration, so Nextcloud would point at an in-cluster Postgres that is never created. Keep postgres.enabled=true (the chart owns the StatefulSet). External-DB support is not implemented." -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+URL the Whiteboard backend uses to reach Nextcloud (JWT verification / API).
+Defaults to the in-cluster Service FQDN when whiteboard.nextcloudUrl is empty —
+mirrors nextcloud-stack.metrics.nextcloudUrl, and keeps the call INSIDE the
+cluster so the whiteboard NetworkPolicy's per-Service egress covers it. Set an
+explicit public URL to route it out through your proxy instead (the whiteboard
+policy then also allows world:443 egress — see templates/networkpolicy*.yaml).
+*/}}
+{{- define "nextcloud-stack.whiteboard.nextcloudUrl" -}}
+{{- if .Values.whiteboard.nextcloudUrl -}}
+{{ .Values.whiteboard.nextcloudUrl }}
+{{- else -}}
+http://{{ include "nextcloud-stack.nextcloud.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.nextcloud.service.port }}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Real-client-IP resolution.
 
 The chart supports two proxy modes, resolved here so nginx.conf, config.php, and

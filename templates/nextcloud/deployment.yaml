@@ -12,6 +12,8 @@ below) — with RWO a second replica deadlocks on a Multi-Attach error.
 {{- fail "nextcloud.replicas > 1 requires ReadWriteMany in BOTH nextcloud.persistence.webroot.accessModes and nextcloud.persistence.data.accessModes — with ReadWriteOnce the second replica fails with a Multi-Attach volume error. This chart targets a single replica; scale out only on RWX storage (if using existingClaim, set accessModes to match the claim)." }}
 {{- end }}
 {{- end }}
+{{- include "nextcloud-stack.requirePostgres" . -}}
+{{- include "nextcloud-stack.requireImagePullSecret" . -}}
 {{- include "nextcloud-stack.requireSecret" (dict "existing" .Values.nextcloud.admin.existingSecret "section" "nextcloud.admin") -}}
 {{- include "nextcloud-stack.requireSecret" (dict "existing" .Values.postgres.auth.existingSecret "section" "postgres.auth") -}}
 {{- if and .Values.valkey.enabled .Values.valkey.auth.enabled -}}

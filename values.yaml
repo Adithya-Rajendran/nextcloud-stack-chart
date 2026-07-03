@@ -524,8 +524,12 @@ whiteboard:
   #   lww   -> in-memory, single instance only (use replicas: 1).
   storageStrategy: redis
 
-  # Public Nextcloud URL the backend calls back to (JWT verification / API).
-  nextcloudUrl: https://nextcloud.example.com
+  # URL the backend calls back to for JWT verification / API. Empty ⇒ the
+  # in-cluster Service (http://<release>.<ns>.svc.cluster.local:<port>), which the
+  # whiteboard NetworkPolicy already allows — the recommended default. Set an
+  # explicit PUBLIC URL only if the backend must reach Nextcloud through your
+  # proxy; the whiteboard policy then also opens world:443 egress.
+  nextcloudUrl: ""
 
   # Public URL where BROWSERS reach this whiteboard backend, set as the
   # `collabBackendUrl` on the Nextcloud whiteboard app. RECOMMENDED: use the SAME
@@ -898,7 +902,11 @@ backup:
   persistence:
     size: 100Gi
     storageClassName: ""
-    accessModes: ["ReadWriteMany"]
+    # ReadWriteOnce works on every StorageClass — the CronJob is the only writer.
+    # Use ReadWriteMany only if you point storageClassName at an RWX class (e.g.
+    # NFS) for real off-cluster DR (recommended for production). A RWX accessMode
+    # on an RWO-only class leaves the PVC Pending and backups silently never run.
+    accessModes: ["ReadWriteOnce"]
     existingClaim: ""             # use an existing PVC instead of creating one
 
   resources:
