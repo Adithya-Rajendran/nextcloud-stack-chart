@@ -58,148 +58,88 @@ app.kubernetes.io/name: {{ include "nextcloud-stack.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
+{{/*
+Per-component labels / selectorLabels. Every component's blocks were identical
+except for the component name, so they delegate to these two parameterized
+helpers. The `<comp>.labels` / `<comp>.selectorLabels` names are kept so call
+sites don't change.
+  Args: (dict "ctx" $ "component" "postgres")
+*/}}
+{{- define "nextcloud-stack.componentSelectorLabels" -}}
+{{ include "nextcloud-stack.selectorLabels" .ctx }}
+app.kubernetes.io/component: {{ .component }}
+{{- end -}}
+
+{{- define "nextcloud-stack.componentLabels" -}}
+helm.sh/chart: {{ include "nextcloud-stack.chart" .ctx }}
+{{ include "nextcloud-stack.componentSelectorLabels" . }}
+{{- if .ctx.Chart.AppVersion }}
+app.kubernetes.io/version: {{ .ctx.Chart.AppVersion | quote }}
+{{- end }}
+app.kubernetes.io/managed-by: {{ .ctx.Release.Service }}
+{{- with .ctx.Values.commonLabels }}
+{{ toYaml . }}
+{{- end }}
+{{- end -}}
+
 {{- define "nextcloud-stack.nextcloud.selectorLabels" -}}
-{{ include "nextcloud-stack.selectorLabels" . }}
-app.kubernetes.io/component: nextcloud
+{{ include "nextcloud-stack.componentSelectorLabels" (dict "ctx" . "component" "nextcloud") }}
+{{- end -}}
+{{- define "nextcloud-stack.nextcloud.labels" -}}
+{{ include "nextcloud-stack.componentLabels" (dict "ctx" . "component" "nextcloud") }}
 {{- end -}}
 
 {{- define "nextcloud-stack.postgres.selectorLabels" -}}
-{{ include "nextcloud-stack.selectorLabels" . }}
-app.kubernetes.io/component: postgres
+{{ include "nextcloud-stack.componentSelectorLabels" (dict "ctx" . "component" "postgres") }}
+{{- end -}}
+{{- define "nextcloud-stack.postgres.labels" -}}
+{{ include "nextcloud-stack.componentLabels" (dict "ctx" . "component" "postgres") }}
 {{- end -}}
 
 {{- define "nextcloud-stack.valkey.selectorLabels" -}}
-{{ include "nextcloud-stack.selectorLabels" . }}
-app.kubernetes.io/component: valkey
+{{ include "nextcloud-stack.componentSelectorLabels" (dict "ctx" . "component" "valkey") }}
+{{- end -}}
+{{- define "nextcloud-stack.valkey.labels" -}}
+{{ include "nextcloud-stack.componentLabels" (dict "ctx" . "component" "valkey") }}
 {{- end -}}
 
 {{- define "nextcloud-stack.clamav.selectorLabels" -}}
-{{ include "nextcloud-stack.selectorLabels" . }}
-app.kubernetes.io/component: clamav
+{{ include "nextcloud-stack.componentSelectorLabels" (dict "ctx" . "component" "clamav") }}
 {{- end -}}
-
-{{- define "nextcloud-stack.nextcloud.labels" -}}
-helm.sh/chart: {{ include "nextcloud-stack.chart" . }}
-{{ include "nextcloud-stack.nextcloud.selectorLabels" . }}
-{{- if .Chart.AppVersion }}
-app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
-{{- end }}
-app.kubernetes.io/managed-by: {{ .Release.Service }}
-{{- with .Values.commonLabels }}
-{{ toYaml . }}
-{{- end }}
-{{- end -}}
-
-{{- define "nextcloud-stack.postgres.labels" -}}
-helm.sh/chart: {{ include "nextcloud-stack.chart" . }}
-{{ include "nextcloud-stack.postgres.selectorLabels" . }}
-{{- if .Chart.AppVersion }}
-app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
-{{- end }}
-app.kubernetes.io/managed-by: {{ .Release.Service }}
-{{- with .Values.commonLabels }}
-{{ toYaml . }}
-{{- end }}
-{{- end -}}
-
-{{- define "nextcloud-stack.valkey.labels" -}}
-helm.sh/chart: {{ include "nextcloud-stack.chart" . }}
-{{ include "nextcloud-stack.valkey.selectorLabels" . }}
-{{- if .Chart.AppVersion }}
-app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
-{{- end }}
-app.kubernetes.io/managed-by: {{ .Release.Service }}
-{{- with .Values.commonLabels }}
-{{ toYaml . }}
-{{- end }}
-{{- end -}}
-
 {{- define "nextcloud-stack.clamav.labels" -}}
-helm.sh/chart: {{ include "nextcloud-stack.chart" . }}
-{{ include "nextcloud-stack.clamav.selectorLabels" . }}
-{{- if .Chart.AppVersion }}
-app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
-{{- end }}
-app.kubernetes.io/managed-by: {{ .Release.Service }}
-{{- with .Values.commonLabels }}
-{{ toYaml . }}
-{{- end }}
+{{ include "nextcloud-stack.componentLabels" (dict "ctx" . "component" "clamav") }}
 {{- end -}}
 
 {{- define "nextcloud-stack.cloudflared.fullname" -}}{{ include "nextcloud-stack.fullname" . }}-cloudflared{{- end -}}
-
 {{- define "nextcloud-stack.cloudflared.selectorLabels" -}}
-{{ include "nextcloud-stack.selectorLabels" . }}
-app.kubernetes.io/component: cloudflared
+{{ include "nextcloud-stack.componentSelectorLabels" (dict "ctx" . "component" "cloudflared") }}
 {{- end -}}
-
 {{- define "nextcloud-stack.cloudflared.labels" -}}
-helm.sh/chart: {{ include "nextcloud-stack.chart" . }}
-{{ include "nextcloud-stack.cloudflared.selectorLabels" . }}
-{{- if .Chart.AppVersion }}
-app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
-{{- end }}
-app.kubernetes.io/managed-by: {{ .Release.Service }}
-{{- with .Values.commonLabels }}
-{{ toYaml . }}
-{{- end }}
+{{ include "nextcloud-stack.componentLabels" (dict "ctx" . "component" "cloudflared") }}
 {{- end -}}
 
 {{- define "nextcloud-stack.whiteboard.fullname" -}}{{ include "nextcloud-stack.fullname" . }}-whiteboard{{- end -}}
-
 {{- define "nextcloud-stack.whiteboard.selectorLabels" -}}
-{{ include "nextcloud-stack.selectorLabels" . }}
-app.kubernetes.io/component: whiteboard
+{{ include "nextcloud-stack.componentSelectorLabels" (dict "ctx" . "component" "whiteboard") }}
 {{- end -}}
-
 {{- define "nextcloud-stack.whiteboard.labels" -}}
-helm.sh/chart: {{ include "nextcloud-stack.chart" . }}
-{{ include "nextcloud-stack.whiteboard.selectorLabels" . }}
-{{- if .Chart.AppVersion }}
-app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
-{{- end }}
-app.kubernetes.io/managed-by: {{ .Release.Service }}
-{{- with .Values.commonLabels }}
-{{ toYaml . }}
-{{- end }}
+{{ include "nextcloud-stack.componentLabels" (dict "ctx" . "component" "whiteboard") }}
 {{- end -}}
 
 {{- define "nextcloud-stack.backup.fullname" -}}{{ include "nextcloud-stack.fullname" . }}-backup{{- end -}}
-
 {{- define "nextcloud-stack.backup.selectorLabels" -}}
-{{ include "nextcloud-stack.selectorLabels" . }}
-app.kubernetes.io/component: backup
+{{ include "nextcloud-stack.componentSelectorLabels" (dict "ctx" . "component" "backup") }}
 {{- end -}}
-
 {{- define "nextcloud-stack.backup.labels" -}}
-helm.sh/chart: {{ include "nextcloud-stack.chart" . }}
-{{ include "nextcloud-stack.backup.selectorLabels" . }}
-{{- if .Chart.AppVersion }}
-app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
-{{- end }}
-app.kubernetes.io/managed-by: {{ .Release.Service }}
-{{- with .Values.commonLabels }}
-{{ toYaml . }}
-{{- end }}
+{{ include "nextcloud-stack.componentLabels" (dict "ctx" . "component" "backup") }}
 {{- end -}}
 
 {{- define "nextcloud-stack.metrics.fullname" -}}{{ include "nextcloud-stack.fullname" . }}-metrics{{- end -}}
-
 {{- define "nextcloud-stack.metrics.selectorLabels" -}}
-{{ include "nextcloud-stack.selectorLabels" . }}
-app.kubernetes.io/component: metrics
+{{ include "nextcloud-stack.componentSelectorLabels" (dict "ctx" . "component" "metrics") }}
 {{- end -}}
-
 {{- define "nextcloud-stack.metrics.labels" -}}
-helm.sh/chart: {{ include "nextcloud-stack.chart" . }}
-{{ include "nextcloud-stack.metrics.selectorLabels" . }}
-{{- if .Chart.AppVersion }}
-app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
-{{- end }}
-app.kubernetes.io/managed-by: {{ .Release.Service }}
-{{- with .Values.commonLabels }}
-{{ toYaml . }}
-{{- end }}
+{{ include "nextcloud-stack.componentLabels" (dict "ctx" . "component" "metrics") }}
 {{- end -}}
 
 {{/*
@@ -257,6 +197,34 @@ Args: (dict "existing" $existingSecret "default" "chart-managed-name")
 imagePullSecrets:
 {{- toYaml . | nindent 2 }}
 {{- end }}
+{{- end -}}
+
+{{/*
+DNS egress rule (to kube-dns on 53/udp+tcp) — every component policy needs it,
+so it lives here once per flavor. Include as an egress list item:
+  {{- include "nextcloud-stack.netpol.cilium.dnsEgress" . | nindent 4 }}
+  {{- include "nextcloud-stack.netpol.v1.dnsEgress" . | nindent 4 }}
+*/}}
+{{- define "nextcloud-stack.netpol.cilium.dnsEgress" -}}
+- toEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: kube-system
+        k8s-app: kube-dns
+  toPorts:
+    - ports: [{ port: "53", protocol: UDP }, { port: "53", protocol: TCP }]
+{{- end -}}
+
+{{- define "nextcloud-stack.netpol.v1.dnsEgress" -}}
+- to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+  ports:
+    - { port: 53, protocol: UDP }
+    - { port: 53, protocol: TCP }
 {{- end -}}
 
 {{/*
