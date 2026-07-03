@@ -81,7 +81,8 @@ zero to a running instance. Then come back to this map for the deep dives.
   Helm release name (examples use `nextcloud-stack`).
 - The chart's **release name is used as a prefix** for almost every object, so
   the Nextcloud Deployment is `<release>`, Postgres is `<release>-postgres`, etc.
-- Chart version documented here: **0.3.0** (Nextcloud appVersion **33.0.3**).
+- This wiki tracks the chart in this repo; for the exact chart version and
+  Nextcloud appVersion see [`Chart.yaml`](../Chart.yaml).
 
 > This wiki lives in [`docs/`](.) in the repo, so it's versioned and reviewed
 > alongside the chart. The top-level [`README.md`](../README.md) is the quick

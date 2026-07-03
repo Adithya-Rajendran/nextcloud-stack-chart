@@ -7,6 +7,18 @@ on:
     branches: [main]
 
 jobs:
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # The chart's shell scripts couple to template internals (secret keys,
+      # resource names) — keep them clean so a broken script can't ship green.
+      - name: shellcheck
+        run: |
+          shellcheck --version
+          shellcheck -S warning scripts/*.sh files/backup.sh
+
   helm:
     name: helm lint + template + kubeconform
     runs-on: ubuntu-latest
@@ -27,6 +39,23 @@ jobs:
 
       - name: helm template
         run: helm template test . -f example-values.yaml > /tmp/rendered.yaml
+
+      # Catch the version/image-tag drift that docs and Chart.yaml keep sliding
+      # out of sync: Chart.yaml appVersion MUST equal the nextcloud-fpm image
+      # tag's version, and the README must reference that same tag.
+      - name: version + image-tag consistency
+        run: |
+          set -e
+          app=$(grep -E '^appVersion:' Chart.yaml | tr -d '"' | awk '{print $2}')
+          imgtag=$(grep -E '^\s+tag:\s+.*-fpm' values.yaml | head -1 | awk '{print $2}' | tr -d '"')
+          imgver=${imgtag%-fpm}
+          if [ "$app" != "$imgver" ]; then
+            echo "FAIL: Chart.yaml appVersion ($app) != nextcloud.image.tag version ($imgver)"; exit 1
+          fi
+          if ! grep -q "nextcloud-fpm:${imgtag}" README.md; then
+            echo "FAIL: README.md php image tag drifted from values.yaml ($imgtag)"; exit 1
+          fi
+          echo "OK: appVersion/image-tag/README consistent ($imgtag)"
 
       # Regression test for requireSafeRealIp. A multi-valued header
       # (X-Forwarded-For / Forwarded) with real_ip_recursive OFF and a non-empty

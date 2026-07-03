@@ -37,8 +37,9 @@
 #   --namespace NS       (default: nextcloud)
 #   --release REL        (default: nextcloud-stack)
 #   --backup-claim NAME  PVC to bind the archive to      (default: nextcloud-backups)
-#   --server HOST        NFS server holding the archive  (default: 10.0.0.13)
-#   --share PATH         NFS export                      (default: /mnt/datapool/Shares/k3s)
+#   --server HOST        NFS server holding the archive  (REQUIRED unless the
+#                        --backup-claim PVC already exists / --skip-bootstrap)
+#   --share PATH         NFS export                      (REQUIRED with --server)
 #   --subdir NAME        subdir under the export         (default: nextcloud-backups)
 #   --whiteboard         forwarded to bootstrap-secrets.sh
 #   --metrics            forwarded to bootstrap-secrets.sh
@@ -49,10 +50,10 @@
 #   --dry-run            print every mutating command without running it
 #   -h | --help
 #
-# Example (production defaults — namespace nextcloud, release nextcloud-stack,
-# primary NAS 10.0.0.13):
+# Example (namespace nextcloud, release nextcloud-stack, archive on an NFS NAS):
 #   scripts/dr-restore.sh \
-#     --values ~/claude/kubernetes/.redeploy-state/nextcloud-install-values.yaml \
+#     --values ./my-install-values.yaml \
+#     --server nfs.example.com --share /export/backups \
 #     --whiteboard --metrics
 
 set -euo pipefail
@@ -62,8 +63,8 @@ ARCHIVE="latest"
 NAMESPACE="nextcloud"
 RELEASE="nextcloud-stack"
 BACKUP_CLAIM="nextcloud-backups"
-NFS_SERVER="10.0.0.13"
-NFS_SHARE="/mnt/datapool/Shares/k3s"
+NFS_SERVER=""
+NFS_SHARE=""
 NFS_SUBDIR="nextcloud-backups"
 WB=0
 MET=0
@@ -109,6 +110,8 @@ need kubectl; need helm; need jq
 [[ -f "$VALUES" ]] || fail "values file not found: $VALUES"
 [[ -f "$CHART_ROOT/Chart.yaml" ]] || fail "chart not found at $CHART_ROOT (run this from the chart's scripts/ dir)"
 [[ -f "$CHART_ROOT/files/backup.sh" ]] || fail "$CHART_ROOT/files/backup.sh missing — wrong chart dir?"
+[[ -n "$NFS_SERVER" ]] || fail "--server is required (the NFS host holding the backup archive)"
+[[ -n "$NFS_SHARE"  ]] || fail "--share is required (the NFS export path on --server)"
 kubectl version --request-timeout=15s >/dev/null 2>&1 || fail "cannot reach the cluster (check --kubeconfig / KUBECONFIG)"
 
 PV_NAME="${RELEASE}-backups-dr"
@@ -297,8 +300,9 @@ cat <<EOF
 ====================================================================
 [dr-restore] DR RESTORE COMPLETE — $RELEASE in namespace $NAMESPACE
 
-Users sign in via authentik (external SSO); those accounts came back with the
-restored database and work immediately.
+If you use an external SSO/OIDC IdP, those accounts came back with the restored
+database and work immediately (the IdP itself is a SEPARATE release — restore it
+from its own backup if the whole cluster was lost).
 
 LOCAL admin account:
   • 'admin' is the BACKED-UP instance's local admin — its password is whatever
@@ -308,8 +312,7 @@ LOCAL admin account:
       kubectl -n $NAMESPACE exec deploy/$RELEASE -c php -- \\
         php /var/www/html/occ user:resetpassword admin
 
-authentik is a SEPARATE release — restore it from its own backup if the whole
-cluster was lost. Tear down DR-only objects later with (NFS data is safe):
+Tear down DR-only objects later with (NFS data is safe):
   kubectl -n $NAMESPACE delete pvc $BACKUP_CLAIM   # only if you want a fresh dynamic backup PVC
   kubectl delete pv $PV_NAME
 ====================================================================

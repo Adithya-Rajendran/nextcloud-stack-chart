@@ -108,16 +108,7 @@ spec:
 {{- end }}
   egress:
     # DNS
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: kube-system
-          podSelector:
-            matchLabels:
-              k8s-app: kube-dns
-      ports:
-        - { port: 53, protocol: UDP }
-        - { port: 53, protocol: TCP }
+    {{- include "nextcloud-stack.netpol.v1.dnsEgress" . | nindent 4 }}
     # Postgres
     - to:
         - podSelector:
@@ -258,16 +249,7 @@ spec:
         - port: {{ .Values.clamav.service.port }}
           protocol: TCP
   egress:
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: kube-system
-          podSelector:
-            matchLabels:
-              k8s-app: kube-dns
-      ports:
-        - { port: 53, protocol: UDP }
-        - { port: 53, protocol: TCP }
+    {{- include "nextcloud-stack.netpol.v1.dnsEgress" . | nindent 4 }}
     # freshclam pulls signatures from public mirrors ("world" approximation).
     - to:
         - ipBlock:
@@ -331,16 +313,7 @@ spec:
         - port: {{ .Values.whiteboard.service.port }}
           protocol: TCP
   egress:
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: kube-system
-          podSelector:
-            matchLabels:
-              k8s-app: kube-dns
-      ports:
-        - { port: 53, protocol: UDP }
-        - { port: 53, protocol: TCP }
+    {{- include "nextcloud-stack.netpol.v1.dnsEgress" . | nindent 4 }}
     # Nextcloud (JWT verification / API)
     - to:
         - podSelector:
@@ -349,6 +322,16 @@ spec:
       ports:
         - port: {{ .Values.nextcloud.service.targetPort }}
           protocol: TCP
+{{- if .Values.whiteboard.nextcloudUrl }}
+    # An explicit whiteboard.nextcloudUrl routes the JWT/API callback OUT through
+    # the proxy — allow HTTPS egress to "world" (0.0.0.0/0 minus in-cluster ranges).
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16]
+      ports:
+        - { port: 443, protocol: TCP }
+{{- end }}
 {{- if .Values.valkey.enabled }}
     # Valkey (shared HA board state)
     - to:
@@ -376,16 +359,7 @@ spec:
       {{- include "nextcloud-stack.cloudflared.selectorLabels" . | nindent 6 }}
   policyTypes: [Egress]
   egress:
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: kube-system
-          podSelector:
-            matchLabels:
-              k8s-app: kube-dns
-      ports:
-        - { port: 53, protocol: UDP }
-        - { port: 53, protocol: TCP }
+    {{- include "nextcloud-stack.netpol.v1.dnsEgress" . | nindent 4 }}
     # The Nextcloud origin.
     - to:
         - podSelector:
@@ -425,16 +399,7 @@ spec:
       app.kubernetes.io/component: test
   policyTypes: [Egress]
   egress:
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: kube-system
-          podSelector:
-            matchLabels:
-              k8s-app: kube-dns
-      ports:
-        - { port: 53, protocol: UDP }
-        - { port: 53, protocol: TCP }
+    {{- include "nextcloud-stack.netpol.v1.dnsEgress" . | nindent 4 }}
     - to:
         - podSelector:
             matchLabels:
@@ -470,16 +435,7 @@ spec:
       ports:
         - { port: 443, protocol: TCP }
         - { port: 6443, protocol: TCP }
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: kube-system
-          podSelector:
-            matchLabels:
-              k8s-app: kube-dns
-      ports:
-        - { port: 53, protocol: UDP }
-        - { port: 53, protocol: TCP }
+    {{- include "nextcloud-stack.netpol.v1.dnsEgress" . | nindent 4 }}
 {{- end }}
 
 ---
@@ -504,16 +460,7 @@ spec:
       ports:
         - { port: 443, protocol: TCP }
         - { port: 6443, protocol: TCP }
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: kube-system
-          podSelector:
-            matchLabels:
-              k8s-app: kube-dns
-      ports:
-        - { port: 53, protocol: UDP }
-        - { port: 53, protocol: TCP }
+    {{- include "nextcloud-stack.netpol.v1.dnsEgress" . | nindent 4 }}
 {{- if .Values.postgres.enabled }}
     # pg-dump initContainer dumps Postgres over the Service (no exec).
     - to:
@@ -552,16 +499,7 @@ spec:
 {{- end }}
 {{- end }}
   egress:
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: kube-system
-          podSelector:
-            matchLabels:
-              k8s-app: kube-dns
-      ports:
-        - { port: 53, protocol: UDP }
-        - { port: 53, protocol: TCP }
+    {{- include "nextcloud-stack.netpol.v1.dnsEgress" . | nindent 4 }}
     # Nextcloud serverinfo API.
     - to:
         - podSelector:

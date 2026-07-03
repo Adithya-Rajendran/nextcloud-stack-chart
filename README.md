@@ -23,7 +23,7 @@ or the optional **Cloudflare tunnel addon**.
 
 | Component | Default image (DHI) | Notes |
 |---|---|---|
-| `php`   | `ghcr.io/adithya-rajendran/nextcloud-fpm:33.0.3-fpm` | PHP-FPM. The only custom image (public on GHCR). Built by [nextcloud-images](https://github.com/adithya-rajendran/nextcloud-images). UID 33. |
+| `php`   | `ghcr.io/adithya-rajendran/nextcloud-fpm:33.0.5-fpm` | PHP-FPM. The only custom image (public on GHCR). Built by [nextcloud-images](https://github.com/adithya-rajendran/nextcloud-images). UID 33. |
 | `web`   | `dhi.io/nginx:1-compat` | Sidecar in the same Pod. Listens 8080. UID 65532. |
 | `postgres` | `dhi.io/postgres:18` | StatefulSet, single replica, RWO. UID 70. |
 | `valkey` | `dhi.io/valkey:9` | Redis-wire-compatible. Auth on by default. UID 65532. |
@@ -126,7 +126,11 @@ cloudflared yourself instead, set `cloudflare.tunnel.enabled: false` and fill
 >     - fromEndpoints:
 >         - matchLabels: { k8s:io.kubernetes.pod.namespace: ingress-nginx }
 > ```
-> On a non-Cilium CNI set `networkPolicy.enabled: false` and manage policy yourself.
+> On a non-Cilium policy-enforcing CNI (Calico, kube-router, …) set
+> `networkPolicy.flavor: kubernetes` to render standard `networking.k8s.io/v1`
+> NetworkPolicies instead (with the documented approximations — see
+> [Security](docs/security.md)). Only set `networkPolicy.enabled: false` if you
+> have no policy enforcement at all and will manage isolation yourself.
 
 ## Real client IP
 
@@ -183,11 +187,14 @@ The chart's NetworkPolicy is load-bearing. It's the only thing keeping
   (`set_real_ip_from` trusts only `trustedCidrs`),
 - Nextcloud↔database traffic (plaintext) from in-cluster sniffers.
 
-The chart renders **CiliumNetworkPolicy** (`cilium.io/v2`), so it **requires
-Cilium**. This is deliberate: the Gateway API path needs `fromEntities: [ingress]`
-to allow the gateway proxy, which standard NetworkPolicy v1 cannot express. On a
-non-Cilium CNI set `networkPolicy.enabled: false` and bring your own equivalent
-policy — otherwise every one of those controls is silently gone.
+By default the chart renders **CiliumNetworkPolicy** (`cilium.io/v2`), so the
+default needs Cilium. This is deliberate: only the Cilium policy can express
+`fromEntities: [ingress]` to allow a **Cilium** Gateway proxy. On a non-Cilium
+policy-enforcing CNI set `networkPolicy.flavor: kubernetes` to render standard
+`networking.k8s.io/v1` policies instead (with the documented approximations — a
+non-Cilium gateway/ingress front must be added to `nextcloudIngressFrom`). Only
+set `networkPolicy.enabled: false` if you have no policy enforcement at all —
+otherwise every one of those controls is silently gone.
 
 With the generic `X-Forwarded-For` mode, `recursive: true` means nginx walks the
 chain skipping trusted hops — so `trustedCidrs` must cover **every** proxy hop in

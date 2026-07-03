@@ -64,7 +64,7 @@ spec:
             {{- toYaml .Values.whiteboard.containerSecurityContext | nindent 12 }}
           env:
             - name: NEXTCLOUD_URL
-              value: {{ .Values.whiteboard.nextcloudUrl | quote }}
+              value: {{ include "nextcloud-stack.whiteboard.nextcloudUrl" . | quote }}
             - name: PORT
               value: {{ .Values.whiteboard.service.port | quote }}
             - name: STORAGE_STRATEGY

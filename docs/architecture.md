@@ -40,7 +40,7 @@ A tour of how the chart is put together — useful before you tune it or debug i
 
 | Component | Object | Default image | Port | UID | Optional? |
 |---|---|---|---|---|---|
-| **php** | Deployment (container) | `ghcr.io/adithya-rajendran/nextcloud-fpm:33.0.3-fpm` | 9000 (loopback) | 33 | core |
+| **php** | Deployment (container) | `ghcr.io/adithya-rajendran/nextcloud-fpm:33.0.5-fpm` | 9000 (loopback) | 33 | core |
 | **web** | same Pod (sidecar) | `dhi.io/nginx:1-compat` | 8080 | 65532 | core |
 | **postgres** | StatefulSet | `dhi.io/postgres:18` | 5432 | 70 | core |
 | **valkey** | Deployment | `dhi.io/valkey:9` | 6379 | 65532 | `valkey.enabled` |

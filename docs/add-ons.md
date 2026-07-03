@@ -10,9 +10,11 @@ single `enabled` toggle plus a little config.
 | Metrics | `metrics.enabled` | off | Prometheus exporter → [Monitoring](monitoring.md) |
 | Backup | `backup.enabled` | off | scheduled backups → [Backup & Restore](backup-and-restore.md) |
 | Cloudflare tunnel | `cloudflare.enabled` | off | exposure → [Exposure & TLS](exposure-and-tls.md#option-3--cloudflare-tunnel-addon) |
+| SSO / OIDC | `sso.enabled` | off | OIDC login via `user_oidc` |
 
-This page covers ClamAV and Whiteboard, plus notes on Office/Collabora (not
-included).
+This page covers ClamAV, Whiteboard, and SSO / OIDC, plus notes on
+Office/Collabora (not included). Metrics, Backup, and the Cloudflare tunnel are
+covered on their linked pages.
 
 ---
 

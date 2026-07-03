@@ -118,12 +118,7 @@ spec:
 {{- end }}
   egress:
     # DNS
-    - toEndpoints:
-        - matchLabels:
-            k8s:io.kubernetes.pod.namespace: kube-system
-            k8s-app: kube-dns
-      toPorts:
-        - ports: [{ port: "53", protocol: UDP }, { port: "53", protocol: TCP }]
+    {{- include "nextcloud-stack.netpol.cilium.dnsEgress" . | nindent 4 }}
     # Postgres
     - toEndpoints:
         - matchLabels:
@@ -238,12 +233,7 @@ spec:
       toPorts:
         - ports: [{ port: {{ .Values.clamav.service.port | quote }}, protocol: TCP }]
   egress:
-    - toEndpoints:
-        - matchLabels:
-            k8s:io.kubernetes.pod.namespace: kube-system
-            k8s-app: kube-dns
-      toPorts:
-        - ports: [{ port: "53", protocol: UDP }, { port: "53", protocol: TCP }]
+    {{- include "nextcloud-stack.netpol.cilium.dnsEgress" . | nindent 4 }}
     # freshclam pulls signatures from public mirrors (outside the cluster).
     - toEntities: [world]
       toPorts:
@@ -297,18 +287,20 @@ spec:
       toPorts:
         - ports: [{ port: {{ .Values.whiteboard.service.port | quote }}, protocol: TCP }]
   egress:
-    - toEndpoints:
-        - matchLabels:
-            k8s:io.kubernetes.pod.namespace: kube-system
-            k8s-app: kube-dns
-      toPorts:
-        - ports: [{ port: "53", protocol: UDP }, { port: "53", protocol: TCP }]
+    {{- include "nextcloud-stack.netpol.cilium.dnsEgress" . | nindent 4 }}
     # Nextcloud (JWT verification / API)
     - toEndpoints:
         - matchLabels:
             {{- include "nextcloud-stack.nextcloud.selectorLabels" . | nindent 12 }}
       toPorts:
         - ports: [{ port: {{ .Values.nextcloud.service.targetPort | quote }}, protocol: TCP }]
+{{- if .Values.whiteboard.nextcloudUrl }}
+    # An explicit whiteboard.nextcloudUrl routes the JWT/API callback OUT through
+    # the proxy (not the in-cluster Service), so allow HTTPS egress to "world".
+    - toEntities: [world]
+      toPorts:
+        - ports: [{ port: "443", protocol: TCP }]
+{{- end }}
 {{- if .Values.valkey.enabled }}
     # Valkey (shared HA board state)
     - toEndpoints:
@@ -333,12 +325,7 @@ spec:
     matchLabels:
       {{- include "nextcloud-stack.cloudflared.selectorLabels" . | nindent 6 }}
   egress:
-    - toEndpoints:
-        - matchLabels:
-            k8s:io.kubernetes.pod.namespace: kube-system
-            k8s-app: kube-dns
-      toPorts:
-        - ports: [{ port: "53", protocol: UDP }, { port: "53", protocol: TCP }]
+    {{- include "nextcloud-stack.netpol.cilium.dnsEgress" . | nindent 4 }}
     # The Nextcloud origin.
     - toEndpoints:
         - matchLabels:
@@ -367,12 +354,7 @@ spec:
       {{- include "nextcloud-stack.selectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: test
   egress:
-    - toEndpoints:
-        - matchLabels:
-            k8s:io.kubernetes.pod.namespace: kube-system
-            k8s-app: kube-dns
-      toPorts:
-        - ports: [{ port: "53", protocol: UDP }, { port: "53", protocol: TCP }]
+    {{- include "nextcloud-stack.netpol.cilium.dnsEgress" . | nindent 4 }}
     - toEndpoints:
         - matchLabels:
             {{- include "nextcloud-stack.nextcloud.selectorLabels" . | nindent 12 }}
@@ -402,12 +384,7 @@ spec:
         values: ["nextcloud-cron", "nextcloud-db-migrate"]
   egress:
     - toEntities: [kube-apiserver]
-    - toEndpoints:
-        - matchLabels:
-            k8s:io.kubernetes.pod.namespace: kube-system
-            k8s-app: kube-dns
-      toPorts:
-        - ports: [{ port: "53", protocol: UDP }, { port: "53", protocol: TCP }]
+    {{- include "nextcloud-stack.netpol.cilium.dnsEgress" . | nindent 4 }}
 {{- end }}
 
 ---
@@ -425,12 +402,7 @@ spec:
       {{- include "nextcloud-stack.backup.selectorLabels" . | nindent 6 }}
   egress:
     - toEntities: [kube-apiserver]
-    - toEndpoints:
-        - matchLabels:
-            k8s:io.kubernetes.pod.namespace: kube-system
-            k8s-app: kube-dns
-      toPorts:
-        - ports: [{ port: "53", protocol: UDP }, { port: "53", protocol: TCP }]
+    {{- include "nextcloud-stack.netpol.cilium.dnsEgress" . | nindent 4 }}
 {{- if .Values.postgres.enabled }}
     # pg-dump initContainer dumps Postgres over the Service (no exec).
     - toEndpoints:
@@ -467,12 +439,7 @@ spec:
 {{- end }}
 {{- end }}
   egress:
-    - toEndpoints:
-        - matchLabels:
-            k8s:io.kubernetes.pod.namespace: kube-system
-            k8s-app: kube-dns
-      toPorts:
-        - ports: [{ port: "53", protocol: UDP }, { port: "53", protocol: TCP }]
+    {{- include "nextcloud-stack.netpol.cilium.dnsEgress" . | nindent 4 }}
     # Nextcloud serverinfo API.
     - toEndpoints:
         - matchLabels:

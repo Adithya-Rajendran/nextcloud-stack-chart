@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "nextcloud-stack values",
+  "description": "Guards the shape of values.yaml. Top-level is closed (a misspelled section name is rejected with a clear error instead of silently doing nothing); sections stay open so any documented key still validates. Only high-value leaf types are asserted.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "nameOverride": { "type": "string" },
+    "fullnameOverride": { "type": "string" },
+    "commonLabels": { "type": "object" },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": { "name": { "type": "string" } }
+      }
+    },
+    "nextcloud": {
+      "type": "object",
+      "properties": {
+        "replicas": { "type": "integer", "minimum": 1 },
+        "admin": {
+          "type": "object",
+          "properties": { "existingSecret": { "type": "string" } }
+        }
+      }
+    },
+    "postgres": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "auth": {
+          "type": "object",
+          "properties": { "existingSecret": { "type": "string" } }
+        }
+      }
+    },
+    "valkey": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "auth": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "existingSecret": { "type": "string" }
+          }
+        }
+      }
+    },
+    "clamav": {
+      "type": "object",
+      "properties": { "enabled": { "type": "boolean" } }
+    },
+    "whiteboard": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "replicas": { "type": "integer", "minimum": 1 },
+        "nextcloudUrl": { "type": "string" },
+        "publicUrl": { "type": "string" },
+        "auth": {
+          "type": "object",
+          "properties": { "existingSecret": { "type": "string" } }
+        }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "host": { "type": "string" }
+      }
+    },
+    "gatewayApi": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "hostnames": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "cloudflare": {
+      "type": "object",
+      "properties": { "enabled": { "type": "boolean" } }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "flavor": {
+          "type": "string",
+          "enum": ["cilium", "kubernetes"],
+          "description": "cilium => CiliumNetworkPolicy (cilium.io/v2); kubernetes => networking.k8s.io/v1 NetworkPolicy."
+        },
+        "allowAllEgress": { "type": "boolean" }
+      }
+    },
+    "tests": {
+      "type": "object",
+      "properties": { "enabled": { "type": "boolean" } }
+    },
+    "metrics": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "auth": {
+          "type": "object",
+          "properties": { "existingSecret": { "type": "string" } }
+        },
+        "serviceMonitor": {
+          "type": "object",
+          "properties": { "enabled": { "type": "boolean" } }
+        }
+      }
+    },
+    "backup": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "retentionDays": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "sso": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "auth": {
+          "type": "object",
+          "properties": { "existingSecret": { "type": "string" } }
+        }
+      }
+    }
+  }
+}

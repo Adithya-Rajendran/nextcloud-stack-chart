@@ -58,148 +58,88 @@ app.kubernetes.io/name: {{ include "nextcloud-stack.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
+{{/*
+Per-component labels / selectorLabels. Every component's blocks were identical
+except for the component name, so they delegate to these two parameterized
+helpers. The `<comp>.labels` / `<comp>.selectorLabels` names are kept so call
+sites don't change.
+  Args: (dict "ctx" $ "component" "postgres")
+*/}}
+{{- define "nextcloud-stack.componentSelectorLabels" -}}
+{{ include "nextcloud-stack.selectorLabels" .ctx }}
+app.kubernetes.io/component: {{ .component }}
+{{- end -}}
+
+{{- define "nextcloud-stack.componentLabels" -}}
+helm.sh/chart: {{ include "nextcloud-stack.chart" .ctx }}
+{{ include "nextcloud-stack.componentSelectorLabels" . }}
+{{- if .ctx.Chart.AppVersion }}
+app.kubernetes.io/version: {{ .ctx.Chart.AppVersion | quote }}
+{{- end }}
+app.kubernetes.io/managed-by: {{ .ctx.Release.Service }}
+{{- with .ctx.Values.commonLabels }}
+{{ toYaml . }}
+{{- end }}
+{{- end -}}
+
 {{- define "nextcloud-stack.nextcloud.selectorLabels" -}}
-{{ include "nextcloud-stack.selectorLabels" . }}
-app.kubernetes.io/component: nextcloud
+{{ include "nextcloud-stack.componentSelectorLabels" (dict "ctx" . "component" "nextcloud") }}
+{{- end -}}
+{{- define "nextcloud-stack.nextcloud.labels" -}}
+{{ include "nextcloud-stack.componentLabels" (dict "ctx" . "component" "nextcloud") }}
 {{- end -}}
 
 {{- define "nextcloud-stack.postgres.selectorLabels" -}}
-{{ include "nextcloud-stack.selectorLabels" . }}
-app.kubernetes.io/component: postgres
+{{ include "nextcloud-stack.componentSelectorLabels" (dict "ctx" . "component" "postgres") }}
+{{- end -}}
+{{- define "nextcloud-stack.postgres.labels" -}}
+{{ include "nextcloud-stack.componentLabels" (dict "ctx" . "component" "postgres") }}
 {{- end -}}
 
 {{- define "nextcloud-stack.valkey.selectorLabels" -}}
-{{ include "nextcloud-stack.selectorLabels" . }}
-app.kubernetes.io/component: valkey
+{{ include "nextcloud-stack.componentSelectorLabels" (dict "ctx" . "component" "valkey") }}
+{{- end -}}
+{{- define "nextcloud-stack.valkey.labels" -}}
+{{ include "nextcloud-stack.componentLabels" (dict "ctx" . "component" "valkey") }}
 {{- end -}}
 
 {{- define "nextcloud-stack.clamav.selectorLabels" -}}
-{{ include "nextcloud-stack.selectorLabels" . }}
-app.kubernetes.io/component: clamav
+{{ include "nextcloud-stack.componentSelectorLabels" (dict "ctx" . "component" "clamav") }}
 {{- end -}}
-
-{{- define "nextcloud-stack.nextcloud.labels" -}}
-helm.sh/chart: {{ include "nextcloud-stack.chart" . }}
-{{ include "nextcloud-stack.nextcloud.selectorLabels" . }}
-{{- if .Chart.AppVersion }}
-app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
-{{- end }}
-app.kubernetes.io/managed-by: {{ .Release.Service }}
-{{- with .Values.commonLabels }}
-{{ toYaml . }}
-{{- end }}
-{{- end -}}
-
-{{- define "nextcloud-stack.postgres.labels" -}}
-helm.sh/chart: {{ include "nextcloud-stack.chart" . }}
-{{ include "nextcloud-stack.postgres.selectorLabels" . }}
-{{- if .Chart.AppVersion }}
-app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
-{{- end }}
-app.kubernetes.io/managed-by: {{ .Release.Service }}
-{{- with .Values.commonLabels }}
-{{ toYaml . }}
-{{- end }}
-{{- end -}}
-
-{{- define "nextcloud-stack.valkey.labels" -}}
-helm.sh/chart: {{ include "nextcloud-stack.chart" . }}
-{{ include "nextcloud-stack.valkey.selectorLabels" . }}
-{{- if .Chart.AppVersion }}
-app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
-{{- end }}
-app.kubernetes.io/managed-by: {{ .Release.Service }}
-{{- with .Values.commonLabels }}
-{{ toYaml . }}
-{{- end }}
-{{- end -}}
-
 {{- define "nextcloud-stack.clamav.labels" -}}
-helm.sh/chart: {{ include "nextcloud-stack.chart" . }}
-{{ include "nextcloud-stack.clamav.selectorLabels" . }}
-{{- if .Chart.AppVersion }}
-app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
-{{- end }}
-app.kubernetes.io/managed-by: {{ .Release.Service }}
-{{- with .Values.commonLabels }}
-{{ toYaml . }}
-{{- end }}
+{{ include "nextcloud-stack.componentLabels" (dict "ctx" . "component" "clamav") }}
 {{- end -}}
 
 {{- define "nextcloud-stack.cloudflared.fullname" -}}{{ include "nextcloud-stack.fullname" . }}-cloudflared{{- end -}}
-
 {{- define "nextcloud-stack.cloudflared.selectorLabels" -}}
-{{ include "nextcloud-stack.selectorLabels" . }}
-app.kubernetes.io/component: cloudflared
+{{ include "nextcloud-stack.componentSelectorLabels" (dict "ctx" . "component" "cloudflared") }}
 {{- end -}}
-
 {{- define "nextcloud-stack.cloudflared.labels" -}}
-helm.sh/chart: {{ include "nextcloud-stack.chart" . }}
-{{ include "nextcloud-stack.cloudflared.selectorLabels" . }}
-{{- if .Chart.AppVersion }}
-app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
-{{- end }}
-app.kubernetes.io/managed-by: {{ .Release.Service }}
-{{- with .Values.commonLabels }}
-{{ toYaml . }}
-{{- end }}
+{{ include "nextcloud-stack.componentLabels" (dict "ctx" . "component" "cloudflared") }}
 {{- end -}}
 
 {{- define "nextcloud-stack.whiteboard.fullname" -}}{{ include "nextcloud-stack.fullname" . }}-whiteboard{{- end -}}
-
 {{- define "nextcloud-stack.whiteboard.selectorLabels" -}}
-{{ include "nextcloud-stack.selectorLabels" . }}
-app.kubernetes.io/component: whiteboard
+{{ include "nextcloud-stack.componentSelectorLabels" (dict "ctx" . "component" "whiteboard") }}
 {{- end -}}
-
 {{- define "nextcloud-stack.whiteboard.labels" -}}
-helm.sh/chart: {{ include "nextcloud-stack.chart" . }}
-{{ include "nextcloud-stack.whiteboard.selectorLabels" . }}
-{{- if .Chart.AppVersion }}
-app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
-{{- end }}
-app.kubernetes.io/managed-by: {{ .Release.Service }}
-{{- with .Values.commonLabels }}
-{{ toYaml . }}
-{{- end }}
+{{ include "nextcloud-stack.componentLabels" (dict "ctx" . "component" "whiteboard") }}
 {{- end -}}
 
 {{- define "nextcloud-stack.backup.fullname" -}}{{ include "nextcloud-stack.fullname" . }}-backup{{- end -}}
-
 {{- define "nextcloud-stack.backup.selectorLabels" -}}
-{{ include "nextcloud-stack.selectorLabels" . }}
-app.kubernetes.io/component: backup
+{{ include "nextcloud-stack.componentSelectorLabels" (dict "ctx" . "component" "backup") }}
 {{- end -}}
-
 {{- define "nextcloud-stack.backup.labels" -}}
-helm.sh/chart: {{ include "nextcloud-stack.chart" . }}
-{{ include "nextcloud-stack.backup.selectorLabels" . }}
-{{- if .Chart.AppVersion }}
-app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
-{{- end }}
-app.kubernetes.io/managed-by: {{ .Release.Service }}
-{{- with .Values.commonLabels }}
-{{ toYaml . }}
-{{- end }}
+{{ include "nextcloud-stack.componentLabels" (dict "ctx" . "component" "backup") }}
 {{- end -}}
 
 {{- define "nextcloud-stack.metrics.fullname" -}}{{ include "nextcloud-stack.fullname" . }}-metrics{{- end -}}
-
 {{- define "nextcloud-stack.metrics.selectorLabels" -}}
-{{ include "nextcloud-stack.selectorLabels" . }}
-app.kubernetes.io/component: metrics
+{{ include "nextcloud-stack.componentSelectorLabels" (dict "ctx" . "component" "metrics") }}
 {{- end -}}
-
 {{- define "nextcloud-stack.metrics.labels" -}}
-helm.sh/chart: {{ include "nextcloud-stack.chart" . }}
-{{ include "nextcloud-stack.metrics.selectorLabels" . }}
-{{- if .Chart.AppVersion }}
-app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
-{{- end }}
-app.kubernetes.io/managed-by: {{ .Release.Service }}
-{{- with .Values.commonLabels }}
-{{ toYaml . }}
-{{- end }}
+{{ include "nextcloud-stack.componentLabels" (dict "ctx" . "component" "metrics") }}
 {{- end -}}
 
 {{/*
@@ -260,6 +200,34 @@ imagePullSecrets:
 {{- end -}}
 
 {{/*
+DNS egress rule (to kube-dns on 53/udp+tcp) — every component policy needs it,
+so it lives here once per flavor. Include as an egress list item:
+  {{- include "nextcloud-stack.netpol.cilium.dnsEgress" . | nindent 4 }}
+  {{- include "nextcloud-stack.netpol.v1.dnsEgress" . | nindent 4 }}
+*/}}
+{{- define "nextcloud-stack.netpol.cilium.dnsEgress" -}}
+- toEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: kube-system
+        k8s-app: kube-dns
+  toPorts:
+    - ports: [{ port: "53", protocol: UDP }, { port: "53", protocol: TCP }]
+{{- end -}}
+
+{{- define "nextcloud-stack.netpol.v1.dnsEgress" -}}
+- to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+  ports:
+    - { port: 53, protocol: UDP }
+    - { port: 53, protocol: TCP }
+{{- end -}}
+
+{{/*
 overwrite.cli.url - derived from overwriteHost/Protocol if not set explicitly.
 */}}
 {{- define "nextcloud-stack.overwriteCliUrl" -}}
@@ -283,6 +251,55 @@ Args (dict):
 {{- $section := index . "section" -}}
 {{- if not $existing -}}
 {{- fail (printf "%s.existingSecret is required. Pre-create the Secret with scripts/bootstrap-secrets.sh and set %s.existingSecret to its name." $section $section) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Fail render when an ENABLED component pulls from the dhi.io registry but no
+imagePullSecrets are set — that combination is a guaranteed ImagePullBackOff
+(dhi.io needs auth; a FREE Docker account is enough). The public-image overlay
+(-f values-public.yaml) swaps these to docker.io, so the guard stays quiet there.
+Create the pull Secret with `scripts/bootstrap-secrets.sh --dhi-username <u> --dhi-token <t>`
+and reference it via imagePullSecrets.
+*/}}
+{{- define "nextcloud-stack.requireImagePullSecret" -}}
+{{- if not .Values.imagePullSecrets -}}
+{{- $regs := list .Values.nextcloud.web.image.registry .Values.nextcloud.kubectl.image.registry -}}
+{{- if .Values.postgres.enabled -}}{{- $regs = append $regs .Values.postgres.image.registry -}}{{- end -}}
+{{- if .Values.valkey.enabled -}}{{- $regs = append $regs .Values.valkey.image.registry -}}{{- end -}}
+{{- if .Values.clamav.enabled -}}{{- $regs = append $regs .Values.clamav.image.registry -}}{{- end -}}
+{{- if .Values.tests.enabled -}}{{- $regs = append $regs .Values.tests.image.registry -}}{{- end -}}
+{{- if has "dhi.io" $regs -}}
+{{- fail "imagePullSecrets is empty but enabled components pull from dhi.io, which requires authentication — this install would ImagePullBackOff. Create the pull Secret with `scripts/bootstrap-secrets.sh --dhi-username <user> --dhi-token <docker-pat>` (a FREE Docker account is enough) and reference it, e.g. `imagePullSecrets: [{name: dhi-pull}]`. Or pass `-f values-public.yaml` to use public Docker Hub images with no pull secret." -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Guard the currently-dead postgres.enabled=false path. The chart has no
+external-database values, so a disabled in-cluster Postgres leaves Nextcloud
+pointed at a host that never comes up. Fail with an actionable message rather
+than shipping a silently-broken install.
+*/}}
+{{- define "nextcloud-stack.requirePostgres" -}}
+{{- if not .Values.postgres.enabled -}}
+{{- fail "postgres.enabled=false is not supported: this chart has no external-database configuration, so Nextcloud would point at an in-cluster Postgres that is never created. Keep postgres.enabled=true (the chart owns the StatefulSet). External-DB support is not implemented." -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+URL the Whiteboard backend uses to reach Nextcloud (JWT verification / API).
+Defaults to the in-cluster Service FQDN when whiteboard.nextcloudUrl is empty —
+mirrors nextcloud-stack.metrics.nextcloudUrl, and keeps the call INSIDE the
+cluster so the whiteboard NetworkPolicy's per-Service egress covers it. Set an
+explicit public URL to route it out through your proxy instead (the whiteboard
+policy then also allows world:443 egress — see templates/networkpolicy*.yaml).
+*/}}
+{{- define "nextcloud-stack.whiteboard.nextcloudUrl" -}}
+{{- if .Values.whiteboard.nextcloudUrl -}}
+{{ .Values.whiteboard.nextcloudUrl }}
+{{- else -}}
+http://{{ include "nextcloud-stack.nextcloud.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.nextcloud.service.port }}
 {{- end -}}
 {{- end -}}
 

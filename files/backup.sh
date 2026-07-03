@@ -45,6 +45,7 @@ set -u
 # failed bare `set -o pipefail` is a special-builtin error that ABORTS some
 # POSIX shells (dash) even with `|| true` — with exit status 0, i.e. a job
 # that "succeeds" having done nothing.
+# shellcheck disable=SC3040  # pipefail is probed, not assumed — see comment above.
 (set -o pipefail) 2>/dev/null && set -o pipefail || true
 export HOME=/tmp
 
@@ -85,7 +86,9 @@ do_backup() {
   STAGE="$BACKUP_ROOT/.work-$TS"
   log "=== backup $TS start ==="
 
-  # Stale stage dirs from crashed runs (>1 day old).
+  # Stale stage dirs from crashed runs (>1 day old). Names are chart-controlled
+  # (.work-<timestamp>, no spaces), so word-splitting the find output is safe.
+  # shellcheck disable=SC2044
   for d in $(find "$BACKUP_ROOT" -maxdepth 1 -type d -name '.work-*' -mmin +1440 2>/dev/null); do
     log "pruning stale stage $d"; rm -rf "$d"
   done
