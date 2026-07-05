@@ -1,13 +1,11 @@
 {{- if .Values.nextcloud.pdb.enabled }}
 {{/*
-PodDisruptionBudget for the Nextcloud Pod.
+PodDisruptionBudget for the Nextcloud Pod. OFF by default (see values.yaml).
 
-With a single replica + RWO Cinder + Recreate strategy, this PDB documents
-intent: don't let node drains evict the only Pod without operator awareness.
-`maxUnavailable: 0` means voluntary disruptions (kubectl drain, node upgrade,
-autoscaler scale-down) must be acknowledged via --force or by deleting the PDB.
-
-Set `pdb.enabled: false` for dev/test clusters where you don't care.
+With a single replica this PDB cannot provide availability; `maxUnavailable: 0`
+only forces voluntary disruptions (kubectl drain, node/OS upgrade, autoscaler
+scale-down) to be acknowledged via --force or by deleting the PDB. That is a
+deliberate opt-in — on rolling-upgrade clusters it otherwise wedges every drain.
 */}}
 apiVersion: policy/v1
 kind: PodDisruptionBudget

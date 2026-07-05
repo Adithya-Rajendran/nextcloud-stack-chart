@@ -192,12 +192,17 @@ nextcloud:
       capabilities:
         drop: ["ALL"]
 
-  # PodDisruptionBudget — documents intent during voluntary disruptions
-  # (node drain, cluster upgrade). With 1 replica + maxUnavailable: 0, drain
-  # operations require explicit --force or PDB deletion. Set enabled: false
-  # for dev/test clusters where uninterrupted nightly drains are fine.
+  # PodDisruptionBudget for the single Nextcloud Pod.
+  # DEFAULT OFF (changed in 0.9.3). A PDB on a 1-replica workload cannot provide
+  # availability (there is nothing to fail over to); with maxUnavailable: 0 its
+  # only effect is to BLOCK voluntary disruptions — `kubectl drain`, and every
+  # rolling node/OS upgrade (Talos, k3s, kubeadm, the cluster-autoscaler) — until
+  # an operator adds --force or deletes the PDB. On rolling-upgrade clusters that
+  # silently wedges upgrades, so it is no longer on by default.
+  # Enable it only if you WANT drains to pause for manual acknowledgement of the
+  # brief single-Pod outage, and you drain with --force / eviction tooling.
   pdb:
-    enabled: true
+    enabled: false
     maxUnavailable: 0
 
   # Service in front of the Pod's nginx container. Stays ClusterIP — an Ingress,
@@ -782,6 +787,41 @@ networkPolicy:
   #       - matchLabels:
   #           k8s:io.kubernetes.pod.namespace: observability
   metricsIngressFrom: []
+
+  # Extra egress destinations for the Nextcloud Pod. Unlike the *IngressFrom
+  # lists (which are peers and get the Nextcloud port appended), each entry here
+  # is a COMPLETE egress rule in the selected flavor's schema — you supply both
+  # the destination AND its ports, because egress targets vary by port.
+  #   flavor cilium     -> a Cilium egress rule (toEndpoints/toEntities/toCIDRSet
+  #                        + toPorts)
+  #   flavor kubernetes -> a v1 egress rule (to: [...] + ports: [...])
+  #
+  # Primary use case: an in-cluster OIDC/SSO provider (sso.enabled) reached over
+  # the gateway VIP. Cilium enforces the SOURCE pod's egress at the gateway/Envoy
+  # hop against the FINAL backend identity, so `allowAllEgress` (world) does NOT
+  # cover an in-cluster IdP — without an explicit rule the backchannel gets 403.
+  #
+  # Example — allow the OIDC backchannel to an Authentik in ns `authentik`,
+  # flavor cilium:
+  #   - toEndpoints:
+  #       - matchLabels:
+  #           k8s:io.kubernetes.pod.namespace: authentik
+  #           app.kubernetes.io/name: authentik
+  #           app.kubernetes.io/component: server
+  #     toPorts:
+  #       - ports:
+  #           - { port: "9000", protocol: TCP }
+  #           - { port: "9443", protocol: TCP }
+  # Same, flavor kubernetes:
+  #   - to:
+  #       - namespaceSelector:
+  #           matchLabels: { kubernetes.io/metadata.name: authentik }
+  #         podSelector:
+  #           matchLabels: { app.kubernetes.io/name: authentik }
+  #     ports:
+  #       - { port: 9000, protocol: TCP }
+  #       - { port: 9443, protocol: TCP }
+  nextcloudEgressTo: []
 
   # Allow egress to the public internet (app updates, federation, freshclam) via
   # Cilium's `world` entity — everything OUTSIDE the cluster. In-cluster traffic
