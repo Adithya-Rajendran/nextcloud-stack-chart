@@ -8,6 +8,15 @@
     "nameOverride": { "type": "string" },
     "fullnameOverride": { "type": "string" },
     "commonLabels": { "type": "object" },
+    "spread": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "required": { "type": "boolean" },
+        "topologyKey": { "type": "string" },
+        "weight": { "type": "integer", "minimum": 1, "maximum": 100 }
+      }
+    },
     "imagePullSecrets": {
       "type": "array",
       "items": {

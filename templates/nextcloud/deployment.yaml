@@ -77,6 +77,8 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         {{- toYaml .Values.nextcloud.podSecurityContext | nindent 8 }}
+      # Prefer a node not already running postgres/valkey/clamav (see values spread).
+      {{- include "nextcloud-stack.podAntiAffinity" . | nindent 6 }}
       # Init: wait for Postgres (and, with manageAppRole, ensure the app role)
       # before fpm starts.
       initContainers:

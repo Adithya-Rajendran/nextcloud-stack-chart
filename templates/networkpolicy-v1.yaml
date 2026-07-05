@@ -147,6 +147,12 @@ spec:
         - port: {{ .Values.whiteboard.service.port }}
           protocol: TCP
 {{- end }}
+{{- range .Values.networkPolicy.nextcloudEgressTo }}
+    # Extra egress destinations (networkPolicy.nextcloudEgressTo) — e.g. an
+    # in-cluster OIDC/SSO provider. Full raw v1 egress rules (to: + ports:).
+    -
+{{ toYaml . | indent 6 }}
+{{- end }}
 {{- if .Values.networkPolicy.allowAllEgress }}
     # Public internet (app updates, federation, …) — "world" approximation:
     # everything except RFC1918 + link-local. See header note 2.

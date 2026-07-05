@@ -35,6 +35,8 @@ spec:
       terminationGracePeriodSeconds: 60
       securityContext:
         {{- toYaml .Values.clamav.podSecurityContext | nindent 8 }}
+      # Prefer a node not already running the other stack workloads (see values spread).
+      {{- include "nextcloud-stack.podAntiAffinity" . | nindent 6 }}
       containers:
         - name: clamav
           image: {{ include "nextcloud-stack.image" .Values.clamav.image }}

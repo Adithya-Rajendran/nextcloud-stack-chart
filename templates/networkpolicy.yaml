@@ -149,6 +149,12 @@ spec:
       toPorts:
         - ports: [{ port: {{ .Values.whiteboard.service.port | quote }}, protocol: TCP }]
 {{- end }}
+{{- range .Values.networkPolicy.nextcloudEgressTo }}
+    # Extra egress destinations (networkPolicy.nextcloudEgressTo) — e.g. an
+    # in-cluster OIDC/SSO provider reached via the gateway VIP. Full raw rules.
+    -
+{{ toYaml . | indent 6 }}
+{{- end }}
 {{- if .Values.networkPolicy.allowAllEgress }}
     # Public internet (app updates, federation, etc.) — everything OUTSIDE the
     # cluster. `world` is exactly that; in-cluster stays on the rules above.

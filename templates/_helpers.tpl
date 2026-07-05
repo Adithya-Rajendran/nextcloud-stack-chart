@@ -157,6 +157,44 @@ http://{{ include "nextcloud-stack.nextcloud.fullname" . }}.{{ .Release.Namespac
 {{- end -}}
 
 {{/*
+Cross-component soft pod anti-affinity.
+
+Spreads the stack's core single-replica workloads (nextcloud, postgres, valkey,
+clamav) onto DIFFERENT nodes, so losing one node can't take the whole stack down
+at once. The term selects the shared name+instance labels that EVERY stack Pod
+carries, so each component repels every other across spread.topologyKey.
+
+preferred (soft) by default: on a cluster with fewer nodes than these workloads
+the scheduler still places every pod — it just packs where it must — so a 3-node
+cluster running 4+ workloads keeps scheduling. spread.required flips it to a HARD
+guarantee (pods that can't be spread go Pending); only sensible with enough nodes.
+
+Emits nothing when spread.enabled is false. Include under a Pod `spec:`:
+  {{- include "nextcloud-stack.podAntiAffinity" . | nindent 6 }}
+*/}}
+{{- define "nextcloud-stack.podAntiAffinity" -}}
+{{- if .Values.spread.enabled }}
+affinity:
+  podAntiAffinity:
+{{- if .Values.spread.required }}
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - topologyKey: {{ .Values.spread.topologyKey }}
+        labelSelector:
+          matchLabels:
+            {{- include "nextcloud-stack.selectorLabels" . | nindent 12 }}
+{{- else }}
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: {{ .Values.spread.weight }}
+        podAffinityTerm:
+          topologyKey: {{ .Values.spread.topologyKey }}
+          labelSelector:
+            matchLabels:
+              {{- include "nextcloud-stack.selectorLabels" . | nindent 14 }}
+{{- end }}
+{{- end }}
+{{- end -}}
+
+{{/*
 Image reference. Prefers digest pinning when .digest is set; otherwise tag.
 Digest pinning protects against tag mutation (key for supply-chain integrity
 on a publicly-exposed install). Tags like ":1" or ":18" can shift under us.
