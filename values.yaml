@@ -36,6 +36,29 @@ commonLabels: {}
 imagePullSecrets: []
 # - name: dhi-pull
 
+# Spread the stack's core single-replica workloads (nextcloud, postgres, valkey,
+# clamav) across nodes so a single node failure can't take everything down at
+# once. Rendered as a pod anti-affinity that selects the shared name+instance
+# labels every stack Pod carries, so each component repels every other across
+# spread.topologyKey. Whiteboard spreads its OWN replicas separately (see
+# whiteboard.topologySpreadConstraints).
+spread:
+  # Master switch. On by default — in the soft mode below it only ever changes
+  # WHERE pods land, never whether they schedule.
+  enabled: true
+  # Soft by default (preferredDuringScheduling): on a cluster with fewer nodes
+  # than these workloads the scheduler still places every pod, just packing where
+  # it must — a 3-node cluster keeps scheduling. Set true for a HARD guarantee
+  # (requiredDuringScheduling): pods that can't be spread go Pending. Only sensible
+  # with enough schedulable nodes (>= 4 to place all four core workloads).
+  required: false
+  # Failure domain to spread across. kubernetes.io/hostname = per-node (the
+  # single-node-failure case). Use topology.kubernetes.io/zone to spread across
+  # AZs instead (needs zone-labeled nodes).
+  topologyKey: kubernetes.io/hostname
+  # Preference strength for the soft rule (1-100). Ignored when required: true.
+  weight: 100
+
 # -----------------------------------------------------------------------------
 # Nextcloud (php-fpm + nginx)
 # -----------------------------------------------------------------------------

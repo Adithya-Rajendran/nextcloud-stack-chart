@@ -174,9 +174,20 @@ do_backup() {
   fi
 
   # ---- Retention (new single-archive layout + pre-0.6 pair layout) ----------
-  find "$BACKUP_ROOT" -maxdepth 1 -name 'backup-*.tar' -mtime +"${RETENTION_DAYS:-14}" -delete 2>/dev/null || true
-  find "$BACKUP_ROOT/postgres"  -name 'pg-*.sql.gz'    -mtime +"${RETENTION_DAYS:-14}" -delete 2>/dev/null || true
-  find "$BACKUP_ROOT/nextcloud" -name 'files-*.tar.gz' -mtime +"${RETENTION_DAYS:-14}" -delete 2>/dev/null || true
+  # Log which archives the prune removed and which it kept, so the retention
+  # policy is observable in the CronJob logs (audit: prune ran silently — you
+  # couldn't tell from the logs whether retention was working or eating good
+  # backups). List (-print) the same matches BEFORE deleting, then show what
+  # survives afterwards.
+  log "retention: pruning archives older than ${RETENTION_DAYS:-14} day(s)"
+  find "$BACKUP_ROOT" -maxdepth 1 -name 'backup-*.tar' -mtime +"${RETENTION_DAYS:-14}" -print -delete 2>/dev/null \
+    | while IFS= read -r f; do log "  pruned $(basename "$f")"; done
+  find "$BACKUP_ROOT/postgres"  -name 'pg-*.sql.gz'    -mtime +"${RETENTION_DAYS:-14}" -print -delete 2>/dev/null \
+    | while IFS= read -r f; do log "  pruned $(basename "$f")"; done
+  find "$BACKUP_ROOT/nextcloud" -name 'files-*.tar.gz' -mtime +"${RETENTION_DAYS:-14}" -print -delete 2>/dev/null \
+    | while IFS= read -r f; do log "  pruned $(basename "$f")"; done
+  log "retention: archives kept:"
+  ls -lh "$BACKUP_ROOT"/backup-*.tar 2>/dev/null | awk '{print "  " $9 "  " $5}' || log "  (none)"
   log "=== backup $TS OK ==="
 }
 
